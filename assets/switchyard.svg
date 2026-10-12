@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>switchyard</title>
+  <defs>
+    <!-- the two rails of a track: a wide stroke minus a narrow one -->
+    <mask id="rails" maskUnits="userSpaceOnUse" x="0" y="0" width="256" height="256">
+      <g fill="none" stroke-linecap="butt">
+        <path d="M0 196H248" stroke="#fff" stroke-width="22"/>
+        <path d="M112 196C164 196 176 112 248 112" stroke="#fff" stroke-width="22"/>
+        <path d="M0 196H248" stroke="#000" stroke-width="13"/>
+        <path d="M112 196C164 196 176 112 248 112" stroke="#000" stroke-width="13"/>
+      </g>
+    </mask>
+  </defs>
+  <!-- sleepers -->
+  <g fill="none" stroke="#986a44" stroke-width="32" stroke-dasharray="7 9">
+    <path d="M118 196C164 196 176 112 252 112"/>
+    <path d="M4 196H252"/>
+  </g>
+  <!-- rails -->
+  <rect width="256" height="256" fill="#241f31" mask="url(#rails)"/>
+  <!-- track plates A and B -->
+  <g stroke="#241f31" stroke-width="5">
+    <circle cx="228" cy="76" r="15" fill="#ffffff"/>
+    <circle cx="228" cy="236" r="15" fill="#ffffff"/>
+  </g>
+  <g fill="#241f31" font-family="DejaVu Sans, Verdana, sans-serif" font-weight="bold" font-size="20" text-anchor="middle">
+    <text x="228" y="83">A</text>
+    <text x="228" y="243">B</text>
+  </g>
+  <!-- signal: green, the way is set -->
+  <path d="M40 150V70" stroke="#241f31" stroke-width="7" stroke-linecap="round"/>
+  <rect x="26" y="16" width="28" height="58" rx="12" fill="#3d3846" stroke="#241f31" stroke-width="5"/>
+  <circle cx="40" cy="32" r="12" fill="#57e389" opacity=".35"/>
+  <circle cx="40" cy="32" r="7" fill="#33d17a" stroke="#241f31" stroke-width="3"/>
+  <circle cx="38" cy="30" r="2" fill="#ffffff"/>
+  <circle cx="40" cy="57" r="7" fill="#5e5c64" stroke="#241f31" stroke-width="3"/>
+  <!-- the lever: thrown, the release goes up to A -->
+  <path d="M140 132l-24-30" stroke="#241f31" stroke-width="9" stroke-linecap="round"/>
+  <path d="M140 132l-24-30" stroke="#c0bfbc" stroke-width="4" stroke-linecap="round"/>
+  <rect x="124" y="126" width="34" height="18" rx="5" fill="#deddda" stroke="#241f31" stroke-width="5"/>
+  <circle cx="114" cy="99" r="10" fill="#c061cb" stroke="#241f31" stroke-width="5"/>
+  <path d="M100 82l-6-8M114 78v-10M88 96l-10-2" stroke="#f6d32d" stroke-width="5" stroke-linecap="round"/>
+  <!-- the release crate on its little wagon -->
+  <rect x="44" y="184" width="64" height="16" rx="4" fill="#5e5c64" stroke="#241f31" stroke-width="5"/>
+  <circle cx="58" cy="204" r="7" fill="#3d3846" stroke="#241f31" stroke-width="4"/>
+  <circle cx="94" cy="204" r="7" fill="#3d3846" stroke="#241f31" stroke-width="4"/>
+  <path d="M52 132l12-12h44l-12 12z" fill="#c061cb" stroke="#241f31" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M96 132l12-12v52l-12 12z" fill="#613583" stroke="#241f31" stroke-width="5" stroke-linejoin="round"/>
+  <rect x="52" y="132" width="44" height="52" fill="#9141ac" stroke="#241f31" stroke-width="5" stroke-linejoin="round"/>
+  <path d="M55 135l38 46M93 135l-38 46" stroke="#613583" stroke-width="5" stroke-linecap="round"/>
+  <path d="M52 158h44" stroke="#241f31" stroke-width="3"/>
+  <!-- motion -->
+  <path d="M8 146h26M14 160h20M8 174h26" stroke="#241f31" stroke-width="4" stroke-linecap="round" opacity=".5"/>
+</svg>

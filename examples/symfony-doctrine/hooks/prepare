@@ -1,0 +1,11 @@
+#!/bin/bash
+# First step of a build, in the release (/app): the latest main. The release starts as a copy
+# of the live one, so only what changed is fetched and installed.
+set -euo pipefail
+# the volume's directories may belong to another uid than the build's
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0='*'
+[ -d .git ] || git init -q -b main
+git fetch -q --depth 1 https://github.com/example/shop.git main
+git reset -q --hard FETCH_HEAD
+echo "BUILT commit=$(git rev-parse --short HEAD)"
+echo "SUBJECT $(git log -1 --format=%s)"

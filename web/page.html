@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>switchyard</title>
+<style>
+  :root { --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #6b7280; --line: #e5e7eb;
+          --ok: #15803d; --warn: #b45309; --off: #6b7280; --btn: #1d4ed8; --stop: #b91c1c; --err: #fee2e2; --log: #f3f4f6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111418; --card: #1a1f26; --text: #e5e7eb; --muted: #9ca3af; --line: #2a313b;
+            --ok: #4ade80; --warn: #fbbf24; --off: #9ca3af; --btn: #3b82f6; --stop: #ef4444; --err: #3b1d1d; --log: #0d1014; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
+         font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: baseline; }
+  h1 small { font-weight: normal; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+  h1 a { font-weight: normal; font-size: 13px; color: var(--btn); }
+  h1 #links { display: inline-flex; gap: 10px; }
+  .meta { white-space: nowrap; margin-right: 8px; }
+  h2 { font-size: 12px; margin: 0 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 14px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  tr:last-child td { border-bottom: 0; }
+  td.num, .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  code { font: 13px ui-monospace, monospace; text-transform: none; letter-spacing: 0; }
+  .live { font-weight: 600; color: var(--ok); }
+  .muted { color: var(--muted); font-size: 13px; }
+  .ok { color: var(--ok); } .running { color: var(--warn); } .failed { color: var(--stop); }
+  .run { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; margin-bottom: 10px; }
+  .run .status { font-weight: 600; }
+  .steps { display: flex; gap: 4px; margin: 6px 0 10px; }
+  .steps span { flex: 1; text-align: center; font-size: 12px; padding: 4px 0; border-radius: 4px;
+                background: var(--line); color: var(--muted); white-space: nowrap; }
+  .steps span.done { background: var(--ok); color: #fff; }
+  .steps span.now { background: var(--warn); color: #fff; }
+  .steps span.bad { background: var(--stop); color: #fff; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button { border: 0; border-radius: 6px; padding: 7px 16px; min-width: 90px; color: #fff; background: var(--btn); font: inherit; cursor: pointer; }
+  button.stop { background: var(--stop); }
+  button.confirm { outline: 2px solid var(--warn); outline-offset: 2px; }
+  button:disabled { opacity: .5; cursor: default; }
+  pre { margin: 0; padding: 10px; background: var(--log); border-radius: 6px; max-height: 420px; overflow: auto;
+        font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; }
+  .err { padding: 8px 12px; border-radius: 8px; background: var(--err); margin-bottom: 14px; }
+  .offline { text-align: center; padding: 48px 16px; }
+  .offline .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--off); margin-right: 6px; }
+  .row { display: flex; gap: 14px; align-items: stretch; margin-bottom: 14px; }
+  .row > .card { margin-bottom: 0; display: flex; flex-direction: column; }
+  .row > .wide { flex: 7; min-width: 0; }
+  .row > .narrow { flex: 3; min-width: 0; }
+  .row .buttons { margin-top: auto; }
+  td.act { text-align: right; white-space: nowrap; }
+  td.act button { padding: 4px 12px; min-width: 0; font-size: 13px; }
+  .warn { padding: 8px 12px; border-radius: 8px; background: var(--err); margin-top: 10px; }
+  .blocked { background: var(--err); }
+  .blocked p { margin: 0 0 8px; }
+  .blocked ul { margin: 0 0 12px; padding-left: 18px; }
+  .blocked li { word-break: break-word; margin-bottom: 4px; }
+  .last { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: baseline; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .last .steps { flex: 0 0 220px; margin: 0; }
+  [hidden] { display: none !important; }
+  @media (max-width: 600px) { .hide-s { display: none; } .row { flex-direction: column; } }
+</style>
+</head>
+<body>
+<main>
+  <div id="offline" class="card offline" hidden>
+    <h1 style="justify-content:center"><span><span class="dot"></span><span id="cluster">The cluster</span> is offline</span></h1>
+    <p class="muted">Switched off, or still booting. This page notices when it is back.</p>
+  </div>
+
+  <div id="online" hidden>
+    <h1><span id="title"></span> <small id="sub"></small> <span id="links"></span></h1>
+    <div id="err" class="err" hidden></div>
+
+    <div class="card">
+      <h2>Releases</h2>
+      <table>
+        <thead><tr><th>Release</th><th>Traffic</th><th>Build</th><th class="hide-s">Built</th><th></th></tr></thead>
+        <tbody id="releases"></tbody>
+      </table>
+      <div id="warn" class="warn" hidden></div>
+      <div id="lastrb" class="last muted" hidden>
+        <span>Last rollback</span>
+        <span class="status" id="rbstatus"></span>
+        <span id="rbwhat"></span>
+        <span id="rbwhen" class="num"></span>
+        <span class="steps" id="rbsteps"></span>
+        <span id="rbmessage"></span>
+      </div>
+    </div>
+
+    <div class="row">
+      <div class="card wide">
+        <h2>Canary deploy</h2>
+        <div class="run">
+          <span class="status" id="status">-</span>
+          <span id="what" class="muted"></span>
+          <span id="when" class="muted num"></span>
+        </div>
+        <div class="steps" id="steps"></div>
+        <p id="message" style="margin:0 0 12px"></p>
+        <div class="buttons">
+          <button id="deploy">Deploy</button>
+          <span class="muted" id="hint"></span>
+        </div>
+      </div>
+
+      <div class="card narrow">
+        <h2>Deploy</h2>
+        <div class="run">
+          <span class="status" id="qstatus">-</span>
+          <span id="qwhen" class="muted num"></span>
+        </div>
+        <div class="steps" id="qsteps"></div>
+        <p id="qmessage" class="muted" style="margin:0 0 12px"></p>
+        <div class="buttons">
+          <button id="quick">Deploy</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card blocked" id="blocked" hidden>
+      <h2>Canary deploy stopped before migrating</h2>
+      <p>These migrations would break the live release, which keeps running on the database during a deploy (and a rollback goes back to it). Deploy anyway only for the planned last step of a change, once no kept release needs what they drop.</p>
+      <ul id="blockedlist"></ul>
+      <div class="buttons"><button id="deployany" class="stop">Deploy anyway</button></div>
+    </div>
+    <div class="card blocked" id="qblocked" hidden>
+      <h2>Deploy stopped before migrating</h2>
+      <p>These migrations would break the live release, which keeps running on the database during a deploy (and a rollback goes back to it). Deploy anyway only for the planned last step of a change, once no kept release needs what they drop.</p>
+      <ul id="qblockedlist"></ul>
+      <div class="buttons"><button id="quickany" class="stop">Deploy anyway</button></div>
+    </div>
+
+    <div class="card" id="jobcard" hidden>
+      <h2>Job <code id="jobname"></code> <span id="jobphase"></span></h2>
+      <pre id="log"></pre>
+    </div>
+    <p class="muted">Both deploys build a new release. Canary moves the traffic over in steps and aborts on its own when the new release turns unhealthy; Deploy switches all of it at once, no checks. <span id="kept">The last releases are kept</span>: Roll back puts all traffic on one of them at once. The database stays as it is. <span id="ver"></span></p>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"})[c]);
+const two = n => String(n).padStart(2, "0");
+const when = iso => { if (!iso) return ""; const d = new Date(iso);
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`; };
+const took = (a, b) => { if (!a) return ""; const s = Math.max(0, Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 1000));
+  return s >= 60 ? Math.floor(s / 60) + " min " + (s % 60) + " s" : s + " s"; };
+
+const STEPS = {
+  deploy: [["build", "build"], ["start", "start"], ["10", "10 %"], ["50", "50 %"], ["100", "100 %"], ["done", "done"]],
+  quick: [["build", "build"], ["start", "start"], ["switch", "switch"], ["done", "done"]],
+  rollback: [["start", "start"], ["switch", "switch"], ["after", "after"], ["done", "done"]],
+};
+const NAMES = {deploy: "canary deploy", quick: "deploy", rollback: "rollback"};
+
+// steps draws the progress bar of a run, the step it is in highlighted.
+function steps(r, list) {
+  const at = list.findIndex(s => s[0] === r.Step);
+  return list.map(([key, label], i) => {
+    let c = "";
+    if (r.Status === "ok" && at >= 0) c = "done";
+    else if (i < at) c = "done";
+    else if (i === at) c = r.Status === "failed" ? "bad" : "now";
+    return `<span class="${c}">${esc(label)}</span>`;
+  }).join("");
+}
+
+function status(el, r) {
+  el.textContent = r.Status || "never run";
+  el.className = "status " + (r.Status === "ok" ? "ok" : r.Status || "");
+}
+
+let clickBusy = false;  // a click in flight
+let clickErr = "";      // the last failed click, shown until the next click
+let armed = "";         // the button waiting for its second click
+let armTimer = 0;
+let lastLog = "";
+let lastRows = "";
+let lastLinks = "";
+
+// dropsBetween: the releases from the live one back to just before x that dropped something on
+// purpose: x's code may still need it.
+const dropsBetween = (rels, x) => rels.filter(y => y.Kept && y.Drops && y.Back >= 0 && y.Back < x.Back);
+
+// blocked shows a stopped build's destructive statements and its Deploy anyway button.
+function blocked(box, list, any, r, what, busy) {
+  const b = r.Status === "failed" && r.Blocked && r.Blocked.length ? r.Blocked : null;
+  $(box).hidden = !b;
+  if (!b) return;
+  const html = b.map(x => `<li><code>${esc(x)}</code></li>`).join("");
+  if ($(list).innerHTML !== html) $(list).innerHTML = html;
+  $(any).disabled = busy;
+  $(any).textContent = armed === what + ":drops" ? "Click again: drop it" : "Deploy anyway";
+  $(any).classList.toggle("confirm", armed === what + ":drops");
+}
+
+function render(v) {
+  $("ver").textContent = "switchyard " + v.Version;
+  document.title = v.Title ? v.Title + " - switchyard" : "switchyard";
+  $("offline").hidden = v.Online;
+  $("online").hidden = !v.Online;
+  if (!v.Online) {
+    $("cluster").textContent = v.Cluster || "The cluster";
+    lastLog = "";
+    return;
+  }
+  $("title").textContent = v.Title || "switchyard";
+  $("sub").textContent = "on " + v.Cluster + " · " + v.Time;
+  const links = (v.Links || []).map(l => `<a href="${esc(l.URL)}" target="_blank" rel="noopener">${esc(l.Label)}</a>`).join("");
+  if (links !== lastLinks) { $("links").innerHTML = links; lastLinks = links; }
+  $("kept").textContent = v.Keep ? `The last ${v.Keep} releases are kept` : "The last releases are kept";
+  const err = clickErr || v.Error || "";
+  $("err").textContent = err; $("err").hidden = !err;
+
+  const busy = v.Busy || clickBusy;
+  const rels = v.Releases || [];
+  const rows = rels.length ? rels.map(x => {
+    const id = "rollback:" + x.ID;
+    let act = "";
+    if (x.Kept && !x.Live) {
+      const risky = x.Back > 1 || dropsBetween(rels, x).length > 0;
+      const label = armed === id ? (risky ? `Sure? ${x.Back} back` : "Click again") : x.Back < 0 ? "Go to" : "Roll back";
+      act = `<button class="stop${armed === id ? " confirm" : ""}" data-release="${esc(x.ID)}"${busy ? " disabled" : ""}>${label}</button>`;
+    }
+    const tag = x.Live ? " · live" : !x.Kept ? " · deploying" : "";
+    return `<tr>
+    <td class="${x.Live ? "live" : ""}">${esc(x.ID)}${tag}<div class="muted">${esc(x.By === "quick" ? "deploy" : x.By)}${x.Drops ? " · dropped" : ""}</div></td>
+    <td class="num">${x.Slot ? x.Weight + " %" : "-"}</td>
+    <td>${(x.Meta || []).length ? x.Meta.map(m => `<span class="meta"><span class="muted">${esc(m.Key)}</span> <code>${esc(m.Value)}</code></span>`).join(" ") : "-"}
+      <div class="muted">${esc(x.Subject)}</div></td>
+    <td class="num hide-s">${esc(when(x.Built))}</td>
+    <td class="act">${act}</td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="muted">No release yet: the next deploy creates the first one.</td></tr>`;
+  if (rows !== lastRows) { $("releases").innerHTML = rows; lastRows = rows; }
+  const target = armed.startsWith("rollback:") && rels.find(x => "rollback:" + x.ID === armed);
+  const drops = target ? dropsBetween(rels, target) : [];
+  const warn = !target ? "" : drops.length
+    ? `${drops.map(y => y.ID).join(", ")} dropped columns or tables on purpose, and the database is not rolled back: ${target.ID} probably still uses them and will break. Click again to go ahead.`
+    : target.Back > 1 ? `${target.ID} is ${target.Back} releases back. The database is not rolled back: if a migration since then dropped something ${target.ID} still uses, it breaks. Click again to go ahead.` : "";
+  $("warn").hidden = !warn;
+  $("warn").textContent = warn;
+
+  const b = v.Rollback;
+  $("lastrb").hidden = !b.Status;
+  status($("rbstatus"), b);
+  $("rbwhat").textContent = b.To ? `${b.From || "?"} → ${b.To}` : "";
+  $("rbwhen").textContent = b.Started ? when(b.Started) + " · " + took(b.Started, b.Finished) : "";
+  $("rbsteps").innerHTML = steps(b, STEPS.rollback);
+  $("rbmessage").textContent = b.Message || "";
+
+  const r = v.Run, q = v.Quick, job = v.Job;
+  status($("status"), r);
+  $("what").textContent = r.To ? `${r.From} → ${r.To}` : "";
+  $("when").textContent = r.Started ? when(r.Started) + " · " + took(r.Started, r.Finished) : "";
+  $("message").textContent = r.Message || "";
+  $("steps").innerHTML = steps(r, STEPS.deploy);
+  blocked("blocked", "blockedlist", "deployany", r, "deploy", busy);
+
+  status($("qstatus"), q);
+  $("qwhen").textContent = q.Started ? when(q.Started) + " · " + took(q.Started, q.Finished) : "";
+  $("qmessage").textContent = q.Message || "";
+  $("qsteps").innerHTML = steps(q, STEPS.quick);
+  blocked("qblocked", "qblockedlist", "quickany", q, "quick", busy);
+
+  $("deploy").disabled = busy;
+  $("quick").disabled = busy;
+  $("deploy").textContent = armed === "deploy" ? "Click again to deploy" : "Deploy";
+  $("quick").textContent = armed === "quick" ? "Click again" : "Deploy";
+  $("deploy").classList.toggle("confirm", armed === "deploy");
+  $("quick").classList.toggle("confirm", armed === "quick");
+  $("hint").textContent = v.Busy ? "A " + (job ? NAMES[job.Kind] || job.Kind : "job") + " is running." : "";
+
+  $("jobcard").hidden = !job;
+  if (job) {
+    $("jobname").textContent = job.Name;
+    $("jobphase").textContent = job.Phase;
+    $("jobphase").className = job.Phase === "complete" ? "ok" : job.Phase;
+    const text = (job.Log || []).join("\n") || "(no log yet)";
+    if (text !== lastLog) {
+      const pre = $("log"), atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+      pre.textContent = text; lastLog = text;
+      if (atEnd) pre.scrollTop = pre.scrollHeight;
+    }
+  }
+}
+
+let last = null;
+async function poll() {
+  try {
+    const r = await fetch("state", {cache: "no-store"});
+    if (r.ok) render(last = await r.json());
+  } catch (e) { /* switchyard itself unreachable for a moment: keep the last view */ }
+  setTimeout(poll, 1000);
+}
+
+// A click arms the button, a second click within 4 s starts the Job. what is deploy, quick,
+// deploy:drops, quick:drops (destructive migrations allowed) or rollback:r<n>.
+async function click(what) {
+  if (armed !== what) {
+    armed = what; clearTimeout(armTimer);
+    armTimer = setTimeout(() => { armed = ""; if (last) render(last); }, 4000);
+    if (last) render(last);
+    return;
+  }
+  armed = ""; clearTimeout(armTimer);
+  clickBusy = true; clickErr = "";
+  if (last) render(last);
+  try {
+    const [kind, opt] = what.split(":");
+    const url = !opt ? kind : kind === "rollback" ? "rollback?release=" + encodeURIComponent(opt) : kind + "?allow=" + encodeURIComponent(opt);
+    const r = await fetch(url, {method: "POST"});
+    if (!r.ok) clickErr = "Failed: " + (await r.text());
+  } catch (e) { clickErr = "Failed: " + e; }
+  clickBusy = false;
+}
+$("deploy").addEventListener("click", () => click("deploy"));
+$("releases").addEventListener("click", e => {
+  const b = e.target.closest("button[data-release]");
+  if (b && !b.disabled) click("rollback:" + b.dataset.release);
+});
+$("quick").addEventListener("click", () => click("quick"));
+$("deployany").addEventListener("click", () => click("deploy:drops"));
+$("quickany").addEventListener("click", () => click("quick:drops"));
+
+poll();
+</script>
+</body>
+</html>

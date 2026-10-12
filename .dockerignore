@@ -1,0 +1,9 @@
+.git
+deploy
+dist
+docs
+examples
+assets
+*.md
+*_test.go
+kit/testdata

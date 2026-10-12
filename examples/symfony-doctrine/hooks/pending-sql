@@ -1,0 +1,11 @@
+#!/bin/bash
+# Prints the SQL of the pending migrations, nothing when there are none. Doctrine's dry run needs
+# this release's dependencies, and a container built from its code: the copied var/cache is the
+# old release's, and the prod environment never rebuilds a stale one.
+set -euo pipefail
+export COMPOSER_HOME=/tmp/composer
+composer install --no-dev --no-interaction --no-scripts --no-progress --quiet >&2
+rm -rf var/cache/prod
+rm -f /tmp/doctrine.sql
+php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration --write-sql=/tmp/doctrine.sql >/dev/null
+if [ -f /tmp/doctrine.sql ]; then cat /tmp/doctrine.sql; fi

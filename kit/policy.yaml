@@ -1,0 +1,52 @@
+# A Job the dashboard creates must name one of the CronJobs as its owner, and its pod must be
+# exactly that CronJob's pod: same image, command, service account, volumes, all of it. So its
+# token cannot run anything else in the namespace, nor read Secrets through a pod. The policy
+# reads the CronJob itself (one binding each), so a new image needs no change here. The Job's
+# name stays free: it carries a rollback's target and Deploy anyway.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{q .Policy}}
+  labels: {app.kubernetes.io/part-of: {{q .App}}}
+spec:
+  failurePolicy: Fail
+  paramKind: {apiVersion: batch/v1, kind: CronJob}
+  matchConstraints:
+    namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: {{q .Namespace}}}}
+    resourceRules:
+      - apiGroups: [batch]
+        apiVersions: ["*"]
+        operations: [CREATE, UPDATE]
+        resources: [jobs]
+  matchConditions:
+    - name: dashboard-only
+      expression: {{q (print "request.userInfo.username == 'system:serviceaccount:" .Namespace ":" .DashboardAccount "'")}}
+  variables:
+    - name: owners
+      expression: >-
+        has(object.metadata.ownerReferences)
+        ? object.metadata.ownerReferences.filter(o, o.kind == 'CronJob').map(o, o.name) : []
+  validations:
+    - expression: {{q (print "variables.owners.size() == 1 && variables.owners[0] in [" (cel .CronJobs) "]")}}
+      message: {{q (print "the dashboard may only create Jobs from the CronJobs " (join .CronJobs ", "))}}
+    - expression: >-
+        variables.owners.size() != 1 || variables.owners[0] != params.metadata.name
+        || object.spec.template.spec == params.spec.jobTemplate.spec.template.spec
+      messageExpression: "'the Job must run exactly the pod of the CronJob ' + params.metadata.name"
+    - expression: >-
+        has(object.spec.parallelism) && object.spec.parallelism == 1
+        && has(object.spec.completions) && object.spec.completions == 1
+      message: one pod per Job
+{{- range .CronJobs}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{q (print $.Policy "-" .)}}
+  labels: {app.kubernetes.io/part-of: {{q $.App}}}
+spec:
+  policyName: {{q $.Policy}}
+  validationActions: [Deny]
+  paramRef: {name: {{q .}}, namespace: {{q $.Namespace}}, parameterNotFoundAction: Deny}
+{{- end}}
