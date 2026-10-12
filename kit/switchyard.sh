@@ -270,7 +270,7 @@ deploy() {
     start_slot "$new" 1
 
     for pct in $STEPS; do
-        [ -n "$from" ] && [ -z "$OLD_BROKE" ] || break
+        if [ -z "$from" ] || [ -n "$OLD_BROKE" ]; then break; fi
         log "$pct % of the traffic to slot $new"
         route "$live" $((100 - pct)) "$new" "$pct"
         set_state step="$pct" "weight_$new=$pct" "weight_$live=$((100 - pct))"
