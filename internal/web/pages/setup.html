@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>switchyard setup</title>
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main style="max-width:640px">
+  <h1><img src="logo.svg" alt=""> switchyard <small>setup</small></h1>
+
+  <div class="card">
+    <h2>1. kubectl and the cluster</h2>
+    <div id="checks" class="muted">Checking...</div>
+    <label for="kubeconfig">Kubeconfig</label>
+    <input id="kubeconfig">
+    <label for="context">Admin context</label>
+    <select id="context"></select>
+    <p class="muted">Used now to create switchyard's own service account (namespace <code>switchyard</code>), and later only when a box is added in a new namespace. Everything else runs on a token that may touch nothing but the boxes.</p>
+    <div class="buttons"><button id="test">Test</button><span id="testmsg" class="muted"></span></div>
+  </div>
+
+  <div class="card">
+    <h2>2. Login and address</h2>
+    <div class="grid">
+      <div><label for="user">User</label><input id="user" value="admin" autocomplete="username"></div>
+      <div><label for="password">Password (8 or more)</label><input id="password" type="password" autocomplete="new-password"></div>
+    </div>
+    <label for="listen">Listen on</label>
+    <input id="listen" value="127.0.0.1:8080">
+    <p class="muted">Plain HTTP: keep it on 127.0.0.1 behind a reverse proxy with HTTPS, or on a trusted network.</p>
+  </div>
+
+  <div id="err" class="err" hidden></div>
+  <div class="buttons"><button id="go" disabled>Set up</button></div>
+
+  <div class="card" id="done" hidden style="margin-top:14px">
+    <h2>Done</h2>
+    <p>switchyard is set up. The service unit is in <code id="unit"></code>. To run it for good:</p>
+    <pre id="cmds"></pre>
+    <p class="muted" id="restart"></p>
+    <div class="buttons"><a href="./">Go to the boxes</a></div>
+  </div>
+</main>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"})[c]);
+let tested = false;
+
+async function check() {
+  const q = $("kubeconfig").value ? "?kubeconfig=" + encodeURIComponent($("kubeconfig").value) : "";
+  const r = await fetch("setup/check" + q);
+  const c = await r.json();
+  const lines = [];
+  lines.push(c.Kubectl ? `<span class="ok">kubectl</span> ${esc(c.KubectlVersion)} <code>${esc(c.Kubectl)}</code>` : `<span class="failed">${esc(c.KubectlError)}</span>`);
+  if (c.Kubectl) lines.push(c.KubeconfigError ? `<span class="failed">${esc(c.KubeconfigError)}</span>` : `<span class="ok">kubeconfig</span> ${c.Contexts.length} contexts`);
+  $("checks").innerHTML = lines.join("<br>");
+  $("kubeconfig").value = c.Kubeconfig || "";
+  $("context").innerHTML = (c.Contexts || []).map(x => `<option${x === c.Current ? " selected" : ""}>${esc(x)}</option>`).join("");
+  tested = false; update();
+}
+
+function form() {
+  return {Kubeconfig: $("kubeconfig").value, Context: $("context").value, User: $("user").value,
+          Password: $("password").value, Listen: $("listen").value};
+}
+
+function update() { $("go").disabled = !tested || !$("user").value || $("password").value.length < 8; }
+
+$("kubeconfig").addEventListener("change", check);
+$("context").addEventListener("change", () => { tested = false; $("testmsg").textContent = ""; update(); });
+$("user").addEventListener("input", update);
+$("password").addEventListener("input", update);
+$("test").addEventListener("click", async () => {
+  $("testmsg").textContent = "Testing...";
+  const r = await fetch("setup/test", {method: "POST", body: JSON.stringify(form())});
+  const t = await r.json();
+  tested = t.OK;
+  $("testmsg").innerHTML = `<span class="${t.OK ? "ok" : "failed"}">${esc(t.Message)}</span>`;
+  update();
+});
+$("go").addEventListener("click", async () => {
+  $("go").disabled = true; $("err").hidden = true;
+  $("go").textContent = "Setting up...";
+  const r = await fetch("setup", {method: "POST", body: JSON.stringify(form())});
+  $("go").textContent = "Set up";
+  if (!r.ok) { $("err").textContent = await r.text(); $("err").hidden = false; update(); return; }
+  const d = await r.json();
+  $("unit").textContent = d.Unit;
+  $("cmds").textContent = d.Commands.join("\n");
+  $("restart").textContent = d.Systemd
+    ? "This already runs as the service: nothing else to do."
+    : "This process serves the boxes until you stop it (Ctrl-C). Stop it before you enable the service, which listens on " + d.Listen + ".";
+  $("done").hidden = false;
+  $("go").hidden = true;
+});
+check();
+</script>
+</body>
+</html>

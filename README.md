@@ -5,224 +5,164 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/actions/workflows/ci.yml"><img src="https://github.com/xuedi/switchyard/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.5.0-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.6.0-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
-  <img src="https://img.shields.io/badge/image-~8_MB-9141ac.svg" alt="Image about 8 MB">
 </p>
 
-<p align="center"><b>Canary deploys and rollbacks for apps built in place, on a small Kubernetes.</b><br>
-For PHP, Node or Python apps whose releases are directories on a volume:<br>
-no image per release, no registry, no CI. One Go binary, one page.</p>
+<p align="center"><b>The tiny canary and rollback tool for image-based apps on a small Kubernetes.</b><br>
+Your app pushes a tagged image; switchyard moves a Deployment from tag to tag.<br>
+One Go binary next to kubectl. No operator, no CRDs, no router.</p>
 
 ---
 
-I run a staging copy of a PHP app on a small k0s cluster at home. Building an image for every
-commit, pushing it to a registry and rolling it out was more machinery than the app itself, and
-plain `git pull` on a volume gave me no way back. switchyard is the middle ground: every deploy
-builds the code into a new directory on a volume, two slots take turns running a release, the
-traffic moves over in steps while switchyard sends its own requests to both, and the last five
-releases stay on disk for a rollback in seconds.
-
-<p align="center"><img src="assets/screenshot.png" alt="switchyard's page: six releases, r12 deploying with 10 % of the traffic, r11 live with 90 %, older ones with a Roll back button; the canary deploy at its 10 % step, the last quick deploy and rollback, and the running Job's log" width="700"></p>
+Argo Rollouts and Flagger are built for clusters with a service mesh and a team to run them.
+On a small cluster with one or two apps that is more machinery than the apps themselves, and a
+plain `kubectl set image` gives you no canary, no guard for the migrations and no history to
+roll back to. switchyard is the middle ground: pick a Deployment, and every newer tag in its
+registry gets a **Canary** and a **Deploy** button, every tag that went live a **Roll back**.
 
 ## Why switchyard
 
-- **No image per release.** The code is built where it runs: a build Job fetches it into a new
-  release directory, which starts as a copy of the live one, so dependencies and assets only
-  change where the code did. A quick deploy of a Symfony app takes under a minute.
-- **A canary with its own traffic.** Small sites have few visitors, and 10 % of few tests
-  nothing. During every step switchyard requests your list of pages from the new release and
-  the old one, round after round, and aborts at the first error or slow answer.
-- **Rollback to any kept release.** The last five releases stay on the volume. Roll back moves
-  all traffic at once and needs no build: about 15 seconds.
-- **A guard against destructive migrations.** The old release keeps running on the migrated
-  database, during a canary and after a rollback. switchyard reads the pending SQL first and
-  stops on drops, renames and `NOT NULL` without a default, with a **Deploy anyway** for the
-  planned last step.
-- **Least privilege, enforced by the cluster.** The page's token can create Jobs only as
-  unchanged copies of three CronJobs; an admission policy checks it. The build Job gets no
-  token at all.
-- **One binary, both halves.** The page, and `switchyard manifests`, which renders the cluster
-  side from one config file: no helm, no kustomize, no operator, no CRDs.
+- **Two drop-downs to add an app.** Pick a namespace, pick its Deployment. switchyard reads the
+  registry and the credentials from the Deployment itself; everything else is optional.
+- **A canary without a router.** A copy of the Deployment runs the new tag with the same pod
+  labels, so the app's own Service sends it a share of the traffic: one pod next to the old
+  ones, then as many as the old ones. Small sites have few visitors, so during every step
+  switchyard requests your pages from a new pod and an old one, round after round, and aborts
+  at the first error.
+- **Rollback to any kept tag.** The last five tags that went live are kept; Roll back puts one
+  back at once, and its image is usually still on the nodes.
+- **A guard against destructive migrations.** The old code keeps running on the migrated
+  database, during a canary and after a rollback. Before anything moves, switchyard runs your
+  pending-SQL command in the new image and stops on drops, renames and `NOT NULL` without a
+  default, with a **Deploy anyway** for the planned last step. Then the migrate command, then
+  the traffic.
+- **Least privilege.** The setup creates a service account whose Role covers only what the
+  boxes need, namespace by namespace; the admin context is used only to add a box.
 - **No load when nobody looks.** The page polls every second while it is open; all viewers share
-  one snapshot, and with nobody watching switchyard does not call the API.
+  one snapshot, and with nobody watching switchyard does not call the cluster.
 
 ## How it works
 
-Two Deployments, slot **a** and slot **b**, mount the releases volume with subPath. One is
-live; the other is idle, or runs the new release while the traffic moves. A router splits the
-traffic between their Services by weight (Caddy so far).
+Each **box** is one Deployment. Its live tag is whatever the Deployment runs; the history (the
+tags that went live, the last runs and their logs) is a ConfigMap `switchyard-<deployment>` next
+to it, so a reinstalled switchyard finds it again.
 
 | Button | What happens |
 |---|---|
-| **Deploy** (canary) | build a new release `r<n>`, start it in the idle slot with one pod, move 10 % then 50 % of the traffic there with a health watch after each step, then 100 %; the old slot stops. Any failure before the end sends all traffic back. |
-| **Deploy** (quick) | the same build, all pods, 100 % at once, no watch. A bad release is undone with a rollback. |
-| **Roll back** | a kept release into the idle slot, 100 % at once, then your `after-rollback` hook (e.g. clear a cache). The page warns before going back more than one release. |
-| **Deploy anyway** | after the build stopped on a destructive migration: the same deploy, migrating anyway. |
+| **Canary** | The pending-SQL check and the migrate command in Jobs of the new image. Then `<deployment>-canary` with 1 pod of the new tag next to the live ones, watched for the pause; then as many pods as the live ones (about half the traffic), watched again. Then the Deployment gets the tag (a normal rolling update), the followers too, the copy goes, and the cache command runs. A failure, or **Abort**, deletes the copy; nothing else changed. |
+| **Deploy** | The same migrations, then the tag on the Deployment and the followers at once, then the cache command. |
+| **Roll back** | A kept tag on the Deployment and the followers at once, then the cache command. The database is not rolled back. |
 
-Each click (and a second one to confirm) creates a Job from a suspended CronJob, as
-`kubectl create job --from=cronjob/deploy` does; the Job runs `switchyard.sh`, which keeps the
-state in a ConfigMap the page reads. Workloads that run the same code, like a scheduler, follow
-the live release. More in [docs/](docs/README.md).
+**Followers** are CronJobs and Deployments that run the same image (a scheduler, a worker):
+they get the tag at every switch. If a rollout does not finish within 10 minutes, the
+Deployment goes back to the tag it had.
 
 ## Install
 
-**1. Write the app's config and hooks.** A config file with the keys below, and a `hooks/`
-directory next to it with at least a `build` hook. Start from
-[`examples/symfony-doctrine/`](examples/symfony-doctrine/): `app.env`, the hooks, and
-`slots.yaml` with the two slots and a follower. Mark your app's block in the Caddyfile:
-
-```
-shop.example.org {
-	reverse_proxy {
-		# BEGIN shop
-		to shop-a.shop.svc.cluster.local:8080
-		# END shop
-	}
-}
-```
-
-**2. Render and apply the cluster side**, then the slots:
+switchyard runs as a user service on any always-on Linux machine with `kubectl` and an admin
+kubeconfig for the cluster, inside or outside it.
 
 ```bash
-switchyard manifests --config app.env | kubectl apply -f -
-kubectl apply -f slots.yaml
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.6.0/switchyard-0.6.0-linux-amd64
+install -m 0755 switchyard-0.6.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+switchyard setup                                                        # http://127.0.0.1:8080
 ```
 
-The binary: `go install github.com/xuedi/switchyard@latest` (Go 1.25+), or the image:
-`docker run --rm -v "$PWD:/c" ghcr.io/xuedi/switchyard manifests --config /c/app.env`.
+The installer checks `kubectl` and the kubeconfig, tests the admin context, asks for a user, a
+password and the address to listen on, and then:
 
-**3. Deploy once by hand** to see the build work, before any page is involved:
+- creates the namespace `switchyard` with a service account and its token,
+- writes `~/.config/switchyard/kubeconfig` with only that token, and `config.json` (both 0600),
+- writes `~/.config/systemd/user/switchyard.service`.
+
+Then stop the installer and start the service for good:
 
 ```bash
-kubectl -n shop create job --from=cronjob/quick quick-$(date +%s)
-kubectl -n shop logs -f job/<that name>
+systemctl --user daemon-reload
+systemctl --user enable --now switchyard
+loginctl enable-linger $USER   # keep it running without a login
 ```
 
-**4. Run the page** on a machine that reaches the API server, with the dashboard's token:
+switchyard speaks plain HTTP: keep it on 127.0.0.1 behind a reverse proxy with HTTPS. Every
+link is relative, so any path prefix works. A login with a signed session cookie guards every
+page; clicks are protected against cross-site requests.
 
-```bash
-mkdir -p data
-kubectl -n shop get secret shop-dashboard-token -o jsonpath='{.data.token}'  | base64 -d > data/token
-kubectl -n shop get secret shop-dashboard-token -o jsonpath='{.data.ca\.crt}' | base64 -d > data/ca.crt
-docker run -d --name switchyard --restart unless-stopped -p 8080:8080 \
-  -e SWITCHYARD_API=https://192.168.1.10:6443 -e SWITCHYARD_NAMESPACE=shop \
-  -e SWITCHYARD_STATE=shop-release -e SWITCHYARD_TITLE="Shop staging" \
-  -v "$PWD/data:/data:ro" --read-only --cap-drop ALL --security-opt no-new-privileges \
-  ghcr.io/xuedi/switchyard:latest
-```
+## Adding a box
 
-or with [`deploy/docker-compose.yml`](deploy/docker-compose.yml). Images are built for amd64,
-arm64 and armv7. Open `http://<that machine>:8080/`. `docker exec switchyard /switchyard check`
-asks the API server whether it would accept all three Jobs, without starting one.
+**Add a box**, pick the namespace and the Deployment. That is all that is required; under
+**More**:
 
-## Configuration
-
-### The page
-
-| Variable | Default | |
-|---|---|---|
-| `SWITCHYARD_API` | | The API server, e.g. `https://192.168.1.10:6443` |
-| `SWITCHYARD_NAMESPACE` | | The app's namespace |
-| `SWITCHYARD_TOKEN` | `/data/token` | The dashboard's token file |
-| `SWITCHYARD_CA` | `/data/ca.crt` | The cluster's CA certificate (PEM) |
-| `SWITCHYARD_LISTEN` | `:8080` | Listen address |
-| `SWITCHYARD_STATE` | `switchyard-release` | The state ConfigMap (`STATE` below) |
-| `SWITCHYARD_JOB_PREFIX` | | `JOB_PREFIX` below |
-| `SWITCHYARD_JOB_LABEL` | `app.kubernetes.io/name=switchyard` | `JOB_LABEL` below |
-| `SWITCHYARD_TITLE` | the namespace | The heading and tab title |
-| `SWITCHYARD_CLUSTER` | `The cluster` | Its name on the offline page |
-| `SWITCHYARD_LINKS` | | Links in the header: `site=https://shop.example.org mail=https://...` |
-| `TZ` | UTC | Time zone of the clock |
-
-### The app (`app.env`)
-
-`KEY=value` lines, taken literally (no shell expansion). `manifests` refuses unknown keys.
-
-| Key | Default | |
-|---|---|---|
-| `APP`, `NAMESPACE` | | Required. `APP` names the objects (`<APP>-switchyard`, `<APP>-dashboard`) |
-| `IMAGE` | | Required. Runs the deploy Jobs: needs bash, kubectl, curl, awk |
-| `IMAGE_PULL_POLICY` | `IfNotPresent` | |
-| `STATE` | `<APP>-release` | The state ConfigMap |
-| `JOB_PREFIX` | | In front of the CronJob names, for several apps in one namespace, e.g. `shop-` |
-| `JOB_LABEL` | `app.kubernetes.io/name=switchyard` | On the deploy, quick and rollback Jobs (for NetworkPolicies) |
-| `RUN_AS` | `1000:1000` | uid:gid of the Jobs |
-| `TZ` | | For the Jobs' log times |
-| `SLOT_A`, `SLOT_B` | `<APP>-a`, `<APP>-b` | The slot Deployments; their Services have the same names |
-| `PORT` | `8080` | The Services' port |
-| `CODE_VOLUME` | `code` | The volume in the slots and followers that mounts the release |
-| `RELEASES_PVC`, `RELEASES_SIZE` | `<APP>-releases`, `10Gi` | The releases volume |
-| `RELEASES_ACCESS`, `STORAGE_CLASS` | `ReadWriteOnce`, cluster default | |
-| `REPLICAS` | `2` | Pods of the live slot |
-| `STEPS`, `PAUSE`, `DRAIN` | `10 50`, `120`, `30` | Canary steps in percent, seconds watched per step, seconds the old slot keeps running |
-| `KEEP` | `5` | Releases kept |
-| `HOST`, `FORWARDED_PROTO` | | `Host` and `X-Forwarded-Proto` of the watch's requests |
-| `HEALTH`, `PAGES` | `/`, `/` | The health path; the pages requested during each step |
-| `FOLLOWERS` | | `cronjob/<name>` or `deployment/<name>` running the live release |
-| `RELEASE_ENV`, `RELEASE_VALUE` | , `{id}` | An environment variable set on slots and followers, e.g. for an error tracker; `{id}` and `{<meta key>}` filled in |
-| `ROUTER` | `caddy` | |
-| `CADDY_ADMIN`, `CADDY_CONFIGMAP` | | Caddy's admin API; `namespace/name` of the ConfigMap with the Caddyfile |
-| `CADDY_KEY`, `CADDY_BLOCK`, `CADDY_COOKIE` | `Caddyfile`, `<APP>`, | Its key, the block's marker name, a sticky-slot cookie |
-| `BUILD_IMAGE` | `IMAGE` | Runs the hooks: the app's image, with what the build needs |
-| `BUILD_MOUNT` | `/app` | Where the release is mounted in the build Job |
-| `BUILD_ENV_FROM` | | `configmap/<name>` and `secret/<name>` |
-| `BUILD_ENV_<NAME>` | | One environment variable each |
-| `BUILD_MOUNTS` | | `configmap/<name>:/path` and `secret/<name>:/path`, read-only |
-| `BUILD_CPU`, `BUILD_MEMORY` | `200m`, `2Gi` | Request and limit of the build |
-| `HOOKS` | `hooks` | The hooks' directory, relative to the config |
-
-### Hooks
-
-Plain bash, run in the release's directory by the build Job:
-
-| Hook | |
+| Field | Meaning |
 |---|---|
-| `prepare` | optional, first: fetch the code |
-| `pending-sql` | optional: print the SQL of the pending migrations (the guard reads it) |
-| `build` | required: dependencies, assets, migrations |
-| `after-rollback` | optional: after a rollback, on the release now live |
+| Container | which one, when the pod has several |
+| Followers | CronJobs and Deployments in the namespace that run the same image |
+| Pending-SQL command | prints the SQL of the pending migrations, nothing when none; run in the new image before anything moves |
+| Migrate command | runs the migrations; in the new image, after the check, before any traffic |
+| Cache command | runs after every switch, forward and back |
+| Site | e.g. `https://shop.example.org`: its host goes as `Host`, its scheme as `X-Forwarded-Proto` with every probe, and it is linked |
+| Pages | the paths requested from a new and an old pod during each canary step |
+| Links | more links in the header, `label=url ...` |
+| Seconds per canary step | 120 if empty |
+| Tags kept for rollback | 5 if empty |
 
-A line `BUILT commit=1a2b3c4` (any `key=value`) is shown with the release, `SUBJECT <text>` under
-it. Details: [docs/kit.md](docs/kit.md).
+The commands run in a Job made from the Deployment's pod spec: the same environment, volumes
+and security context, the new image, the probes and ports left out. A command is split at
+spaces, no shell.
+
+Adding, changing or removing a box writes switchyard's Role in that namespace, so it needs the
+admin context once. If the namespace has no pull secret for the image's registry, the form
+takes a token: it is stored as the Secret `switchyard-pull` and added to the pods' service
+account.
+
+## The image contract
+
+What your app's build has to deliver for switchyard:
+
+- **Immutable tags**, one per release: a tag is read once and never again. Moving tags such as
+  `latest` are ignored.
+- The label **`org.opencontainers.image.created`** (or the image's creation time): tags are
+  ordered by it, since their names need not sort.
+- Optional, shown on the page: `org.opencontainers.image.version` and `revision`,
+  `switchyard.subject` (e.g. the commit subject), `switchyard.meta.<key>` (e.g. one commit per
+  repository).
+- If the app has migrations: a pending-SQL command (stdout the SQL, logs on stderr, a line
+  `-- Version <name>` or `-- Migration <name>` before each migration's statements), a migrate
+  command, and `sh` plus a writable `/tmp` in the image for the check's wrapper.
+- Readiness probes that mean it: the canary waits for ready pods.
+
+Registries: ghcr.io, Docker Hub and any registry with the OCI distribution API and bearer or
+basic auth.
 
 ## Migrations
 
-During a deploy the old release runs on the new schema, and a rollback goes back to old code
-on it. So migrations follow **expand and contract**: add now, switch the code, drop only once
-no kept release needs it. With a `pending-sql` hook the build enforces it, see
-[docs/migrations.md](docs/migrations.md). switchyard never rolls the database back.
+During a canary the old code runs on the migrated database, and a rollback goes back to such
+code later. So a migration may only add: new tables, nullable columns or ones with a default,
+indexes, foreign keys, backfills. switchyard blocks:
 
-## Security
+- `DROP TABLE`, `TRUNCATE`, `RENAME TABLE`, `DELETE FROM`
+- `ALTER TABLE ... DROP` a column, `RENAME`, `CHANGE`, `MODIFY`, `ALTER COLUMN ... TYPE` or
+  `SET NOT NULL`
+- `ADD` a column `NOT NULL` without a default
 
-- **There is no login.** Anyone who can reach the page can deploy and roll back. Run it on a
-  trusted LAN or behind a proxy that authenticates. All its links are relative, so any path
-  prefix works.
-- What the page's token can do is limited by the cluster, not by the page: read the state, the
-  three CronJobs, Jobs and their logs, and create Jobs that a `ValidatingAdmissionPolicy` checks
-  to be unchanged copies of the three CronJobs. No exec, Secrets, delete or scale.
-- The one free part of such a Job is its name, so a rollback's target and Deploy anyway travel
-  there (`rollback-r7-<time>`, `deploy-drops-<time>`); `switchyard.sh` validates the name, and a
-  stolen token can only deploy what your hooks fetch, or roll back to a kept release.
-- POSTs from other sites are refused (`http.CrossOriginProtection`).
-- The build Job runs your app's code with your app's secrets, and no API token.
-- The router's admin API changes the whole router: let only the deploy Jobs reach it, see
-  [docs/routers.md](docs/routers.md).
+`CHANGE` and `MODIFY` are blocked even when they only change a comment: without the live schema
+a comment change cannot be told from a type change. Split a destructive change: add the new
+thing, deploy, move the code over, deploy, then drop the old thing with **Deploy anyway** once
+no kept tag needs it. The tags table marks a tag that dropped something, and Roll back warns
+when it would cross one.
 
 ## Development
 
 ```bash
-just check                                   # gofmt, vet, tests, shellcheck
-just run https://192.168.1.10:6443 data/token data/ca.crt shop
-just manifests examples/symfony-doctrine/app.env
+just check     # gofmt, vet, the builds for amd64, arm64 and armv7
+just run       # the installer or the boxes on 127.0.0.1:8080
+just release   # the release binaries in dist/
 ```
 
-The tests run the page's read path and every button against a fake API server, render the
-manifests, and run the shell parts (Job-name options, the Caddyfile rewrite, the SQL checker
-against sample migrations); no cluster needed.
+Standard library only. `XDG_CONFIG_HOME=/tmp/sy just run` keeps a test setup apart from your
+own.
 
 ## License
 

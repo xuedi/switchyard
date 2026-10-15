@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>switchyard</title>
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main class="narrow">
+  <h1><img src="logo.svg" alt=""> switchyard</h1>
+  <form class="card" method="post" action="login">
+    <div id="failed" class="err" hidden>Wrong user or password.</div>
+    <label for="user">User</label>
+    <input id="user" name="user" autocomplete="username" autofocus required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <div class="buttons" style="margin-top:14px"><button>Log in</button></div>
+  </form>
+</main>
+<script>
+document.getElementById("failed").hidden = !location.search.includes("failed");
+</script>
+</body>
+</html>

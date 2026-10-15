@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>switchyard</title>
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1><a href="./"><img src="logo.svg" alt="switchyard"></a> <span id="title"></span> <small id="sub"></small> <span class="links" id="links"></span></h1>
+
+  <div id="offline" class="card offline" hidden>
+    <h1 style="justify-content:center"><span><span class="dot"></span><span id="cluster">The cluster</span> is offline</span></h1>
+    <p class="muted">Switched off, or still booting. This page notices when it is back.</p>
+  </div>
+
+  <div id="online" hidden>
+    <div id="err" class="err" hidden></div>
+
+    <div class="card">
+      <h2>Live</h2>
+      <div class="run">
+        <code class="live" id="live"></code>
+        <span id="livesub"></span>
+        <span class="muted num" id="pods"></span>
+      </div>
+      <div class="muted" id="canary"></div>
+      <div class="muted"><code id="repo"></code></div>
+    </div>
+
+    <div class="card" id="runcard" hidden>
+      <h2 id="runtitle"></h2>
+      <div class="run">
+        <span class="status" id="status"></span>
+        <span id="what" class="muted"></span>
+        <span id="when" class="muted num"></span>
+      </div>
+      <div class="steps" id="steps"></div>
+      <p id="message" style="margin:0 0 10px"></p>
+      <div class="buttons" id="abortrow" hidden style="margin-bottom:10px"><button id="abort" class="stop">Abort</button><span class="muted">Deletes the canary copy; the live tag keeps everything.</span></div>
+      <pre id="log"></pre>
+    </div>
+
+    <div class="card blocked" id="blocked" hidden>
+      <h2>Stopped before migrating</h2>
+      <p>These migrations would break the live tag, which keeps running on the database during a deploy (and a rollback goes back to it). Deploy anyway only for the planned last step of a change, once no kept tag needs what they drop.</p>
+      <ul id="blockedlist"></ul>
+      <div class="buttons"><button id="anyway" class="stop">Deploy anyway</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Tags</h2>
+      <table>
+        <thead><tr><th>Tag</th><th>Build</th><th class="hide-s">Created</th><th></th></tr></thead>
+        <tbody id="tags"></tbody>
+      </table>
+      <div id="warn" class="warn" hidden></div>
+    </div>
+
+    <p class="muted">Canary runs the new tag in a copy of the Deployment next to the live pods, first 1 pod, then as many as the live ones, <span id="pause"></span> each, with the pages requested from a new and an old pod, and aborts on its own when the new tag turns unhealthy. Deploy puts the tag on the Deployment at once, no checks. Both run the migrations first. <span id="kept"></span> Roll back puts one of them back at once; the database stays as it is. <span id="ver"></span></p>
+  </div>
+</main>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"})[c]);
+const two = n => String(n).padStart(2, "0");
+const when = iso => { if (!iso) return ""; const d = new Date(iso);
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`; };
+const took = (a, b) => { if (!a) return ""; const s = Math.max(0, Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 1000));
+  return s >= 60 ? Math.floor(s / 60) + " min " + (s % 60) + " s" : s + " s"; };
+const box = new URLSearchParams(location.search).get("b") || "";
+
+const STEPS = {
+  canary: [["migrate", "migrate"], ["one", "1 pod"], ["half", "half"], ["switch", "switch"], ["after", "after"], ["done", "done"]],
+  quick: [["migrate", "migrate"], ["switch", "switch"], ["after", "after"], ["done", "done"]],
+  rollback: [["switch", "switch"], ["after", "after"], ["done", "done"]],
+};
+const NAMES = {canary: "Canary deploy", quick: "Deploy", rollback: "Rollback"};
+
+function steps(r, list) {
+  const at = list.findIndex(s => s[0] === r.Step);
+  return list.map(([key, label], i) => {
+    let c = "";
+    if (r.Status === "ok") c = "done";
+    else if (i < at) c = "done";
+    else if (i === at) c = r.Status === "running" ? "now" : "bad";
+    return `<span class="${c}">${esc(label)}</span>`;
+  }).join("");
+}
+
+let clickBusy = false, clickErr = "", armed = "", armTimer = 0, lastLog = "", lastRows = "", lastLinks = "", last = null;
+
+// dropsBetween: kept tags from the live one back to just before x that dropped something on
+// purpose: x's code may still need it.
+const dropsBetween = (rows, x) => rows.filter(y => y.Kept && y.Drops && y.Back >= 0 && y.Back < x.Back);
+
+function button(what, label, cls, busy) {
+  const on = armed === what;
+  return `<button class="${cls}${on ? " confirm" : ""}" data-what="${esc(what)}"${busy ? " disabled" : ""}>${on ? "Click again" : label}</button>`;
+}
+
+function render(v) {
+  $("ver").textContent = "switchyard " + v.Version;
+  document.title = v.Box + " - switchyard";
+  $("title").textContent = v.Box;
+  $("offline").hidden = v.Online;
+  $("online").hidden = !v.Online;
+  if (!v.Online) { $("cluster").textContent = v.Cluster || "The cluster"; lastLog = ""; return; }
+  $("sub").textContent = "on " + v.Cluster + " · " + v.Time;
+  const links = (v.Links || []).map(l => `<a href="${esc(l.URL)}" target="_blank" rel="noopener">${esc(l.Label)}</a>`).join("");
+  if (links !== lastLinks) { $("links").innerHTML = links; lastLinks = links; }
+  const err = clickErr || v.Error || "";
+  $("err").textContent = err; $("err").hidden = !err;
+  $("pause").textContent = v.Pause + " s";
+  $("kept").textContent = `The last ${v.Keep} tags that went live are kept:`;
+
+  $("live").textContent = v.Live || "-";
+  $("livesub").textContent = v.Subject || "";
+  $("pods").textContent = `${v.Ready} of ${v.Replicas} pods ready`;
+  $("repo").textContent = v.Repo || "";
+  $("canary").innerHTML = v.Canary ? `Canary <code>${esc(v.Canary.Tag)}</code>: ${v.Canary.Ready} of ${v.Canary.Replicas} pods ready, about ${v.Canary.Share} % of the traffic` : "";
+
+  const busy = v.Busy || clickBusy;
+  const rows = v.Images || [];
+  const html = rows.length ? rows.map(x => {
+    let act = "";
+    if (x.Kept && !x.Live) {
+      const risky = x.Back > 1 || dropsBetween(rows, x).length > 0;
+      act = button("rollback:" + x.Tag, x.Newer ? "Go to" : risky ? `Roll back ${x.Back}` : "Roll back", "stop", busy);
+    } else if (x.Newer && !x.Live) {
+      act = button("canary:" + x.Tag, "Canary", "", busy) + button("quick:" + x.Tag, "Deploy", "", busy);
+    }
+    const badges = (x.Live ? `<span class="badge live">live</span>` : "") + (x.Canary ? `<span class="badge canary">canary</span>` : "")
+      + (x.Kept && !x.Live ? `<span class="badge">kept</span>` : "") + (x.Newer && !x.Kept ? `<span class="badge">new</span>` : "")
+      + (x.Drops ? `<span class="badge">dropped</span>` : "") + (x.Missing ? `<span class="badge">not in the registry</span>` : "");
+    const meta = (x.Meta || []).map(m => `<span class="meta"><span class="muted">${esc(m.Key)}</span> <code>${esc(m.Value)}</code></span>`).join(" ");
+    const went = x.At ? `<div class="muted">live ${esc(when(x.At))} by ${esc(x.By)}</div>` : "";
+    return `<tr>
+      <td><code class="${x.Live ? "live" : ""}">${esc(x.Tag)}</code> ${badges}${went}</td>
+      <td>${meta || (x.Version ? `<code>${esc(x.Version)}</code>` : "")}<div class="muted">${esc(x.Subject)}</div></td>
+      <td class="num hide-s">${esc(when(x.Created))}</td>
+      <td class="act">${act}</td></tr>`;
+  }).join("") : `<tr><td colspan="4" class="muted">No tags read yet.</td></tr>`;
+  if (html !== lastRows) { $("tags").innerHTML = html; lastRows = html; }
+
+  const target = armed.startsWith("rollback:") && rows.find(x => "rollback:" + x.Tag === armed);
+  const drops = target ? dropsBetween(rows, target) : [];
+  const warn = !target ? "" : drops.length
+    ? `${drops.map(y => y.Tag).join(", ")} dropped columns or tables on purpose, and the database is not rolled back: ${target.Tag} probably still uses them and will break. Click again to go ahead.`
+    : target.Back > 1 ? `${target.Tag} is ${target.Back} tags back. The database is not rolled back: if a migration since then dropped something ${target.Tag} still uses, it breaks. Click again to go ahead.` : "";
+  $("warn").hidden = !warn; $("warn").textContent = warn;
+
+  const r = v.Run;
+  $("runcard").hidden = !r;
+  if (r) {
+    $("runtitle").textContent = (v.Busy ? "" : "Last: ") + (NAMES[r.Kind] || r.Kind) + (r.Allow ? " (anyway)" : "");
+    $("status").textContent = r.Status; $("status").className = "status " + r.Status;
+    $("what").textContent = `${r.From || "?"} → ${r.To}`;
+    $("when").textContent = when(r.Started) + " · " + took(r.Started, r.Finished);
+    $("steps").innerHTML = steps(r, STEPS[r.Kind] || []);
+    $("message").textContent = r.Message || "";
+    $("abortrow").hidden = !(v.Busy && v.Abortable);
+    $("abort").textContent = armed === "abort" ? "Click again to abort" : "Abort";
+    $("abort").classList.toggle("confirm", armed === "abort");
+    const text = (r.Log || []).join("\n") || "(no log)";
+    if (text !== lastLog) {
+      const pre = $("log"), atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+      pre.textContent = text; lastLog = text;
+      if (atEnd) pre.scrollTop = pre.scrollHeight;
+    }
+  }
+  const b = !v.Busy && r && r.Status === "failed" && r.Blocked && r.Blocked.length && r.Kind !== "rollback" ? r : null;
+  $("blocked").hidden = !b;
+  if (b) {
+    const list = b.Blocked.map(x => `<li><code>${esc(x)}</code></li>`).join("");
+    if ($("blockedlist").innerHTML !== list) $("blockedlist").innerHTML = list;
+    const what = "anyway:" + b.Kind + ":" + b.To;
+    $("anyway").disabled = busy;
+    $("anyway").textContent = armed === what ? "Click again: let them through" : `Deploy ${b.To} anyway`;
+    $("anyway").classList.toggle("confirm", armed === what);
+    $("anyway").dataset.what = what;
+  }
+}
+
+async function poll() {
+  try {
+    const r = await fetch("state?b=" + encodeURIComponent(box), {cache: "no-store"});
+    if (r.status === 401) { location.href = "login"; return; }
+    if (r.ok) render(last = await r.json());
+  } catch (e) { /* switchyard itself unreachable for a moment: keep the last view */ }
+  setTimeout(poll, 1000);
+}
+
+// A click arms the button, a second click within 4 s sends it. what is canary:<tag>,
+// quick:<tag>, rollback:<tag>, anyway:<kind>:<tag> or abort.
+async function click(what) {
+  if (armed !== what) {
+    armed = what; clearTimeout(armTimer);
+    armTimer = setTimeout(() => { armed = ""; lastRows = ""; if (last) render(last); }, 4000);
+    lastRows = ""; if (last) render(last);
+    return;
+  }
+  armed = ""; clearTimeout(armTimer);
+  clickBusy = true; clickErr = ""; lastRows = "";
+  if (last) render(last);
+  try {
+    let [kind, a, b] = what.split(":");
+    let url;
+    if (kind === "abort") url = "abort?b=" + encodeURIComponent(box);
+    else if (kind === "anyway") url = `${a}?b=${encodeURIComponent(box)}&tag=${encodeURIComponent(b)}&allow=1`;
+    else url = `${kind}?b=${encodeURIComponent(box)}&tag=${encodeURIComponent(a)}`;
+    const r = await fetch(url, {method: "POST"});
+    if (!r.ok) clickErr = "Failed: " + (await r.text());
+  } catch (e) { clickErr = "Failed: " + e; }
+  clickBusy = false; lastRows = "";
+}
+$("tags").addEventListener("click", e => {
+  const b = e.target.closest("button[data-what]");
+  if (b && !b.disabled) click(b.dataset.what);
+});
+$("abort").addEventListener("click", () => click("abort"));
+$("anyway").addEventListener("click", () => click($("anyway").dataset.what));
+
+poll();
+</script>
+</body>
+</html>

@@ -1,8 +1,0 @@
-#!/bin/bash
-# The rest of the build: dependencies with their scripts, assets, migrations, a warm cache.
-set -euo pipefail
-export COMPOSER_HOME=/tmp/composer
-composer install --no-dev --no-interaction --no-progress --optimize-autoloader
-php bin/console asset-map:compile
-php bin/console doctrine:migrations:migrate --no-interaction --allow-no-migration
-php bin/console cache:warmup

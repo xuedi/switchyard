@@ -1,4 +1,0 @@
-#!/bin/bash
-# After a rollback: the shared cache may hold entries the older code cannot read.
-set -euo pipefail
-php bin/console cache:pool:clear cache.app --no-interaction
