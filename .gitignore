@@ -2,3 +2,4 @@
 /dist/
 *.token
 /local.just
+/.idea/
