@@ -30,6 +30,7 @@ type Server struct {
 	listen     string
 	kubeconfig string // the installer's admin kubeconfig
 	trusted    proxies
+	limiter    auth.Limiter
 
 	mu     sync.Mutex
 	engine *deploy.Engine
@@ -221,9 +222,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "./", http.StatusSeeOther)
 		return
 	}
-	if r.FormValue("user") != cfg.User || !auth.Check(cfg.Hash, r.FormValue("password")) {
-		time.Sleep(time.Second)
-		http.Redirect(w, r, "login?failed=1", http.StatusSeeOther)
+	ok, locked := s.limiter.Try(s.trusted.client(r), func() bool {
+		user := auth.Same(r.FormValue("user"), cfg.User)
+		return auth.Check(cfg.Hash, r.FormValue("password")) && user
+	})
+	if !ok {
+		why := "1"
+		if locked {
+			why = "locked"
+		}
+		http.Redirect(w, r, "login?failed="+why, http.StatusSeeOther)
 		return
 	}
 	s.newSession(w, r, cfg)
@@ -267,9 +275,13 @@ func (s *Server) logoutAll(w http.ResponseWriter, r *http.Request) {
 // password changes the password and ends every other session.
 func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 	cfg := s.store.Get()
-	if !auth.Check(cfg.Hash, r.FormValue("old")) {
-		time.Sleep(time.Second)
-		http.Redirect(w, r, "password?failed=old", http.StatusSeeOther)
+	ok, locked := s.limiter.Try(s.trusted.client(r), func() bool { return auth.Check(cfg.Hash, r.FormValue("old")) })
+	if !ok {
+		why := "old"
+		if locked {
+			why = "locked"
+		}
+		http.Redirect(w, r, "password?failed="+why, http.StatusSeeOther)
 		return
 	}
 	pw := r.FormValue("new")

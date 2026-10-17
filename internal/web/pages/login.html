@@ -12,6 +12,7 @@
   <h1><img src="logo.svg" alt=""> switchyard</h1>
   <form class="card" method="post" action="login">
     <div id="failed" class="err" hidden>Wrong user or password.</div>
+    <div id="locked" class="err" hidden>Too many failed logins from here: try again in 15 minutes.</div>
     <label for="user">User</label>
     <input id="user" name="user" autocomplete="username" autofocus required>
     <label for="password">Password</label>
@@ -20,7 +21,9 @@
   </form>
 </main>
 <script>
-document.getElementById("failed").hidden = !location.search.includes("failed");
+const failed = new URLSearchParams(location.search).get("failed");
+document.getElementById("failed").hidden = failed !== "1";
+document.getElementById("locked").hidden = failed !== "locked";
 </script>
 </body>
 </html>
