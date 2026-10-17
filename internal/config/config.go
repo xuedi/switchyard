@@ -77,6 +77,7 @@ type Backup struct {
 	Tools       string `json:"tools,omitempty"` // image with sh, tar, zstd, sha256sum; "" is the first database's
 	KeepDaily   int    `json:"keepDaily,omitempty"`
 	KeepMonthly int    `json:"keepMonthly,omitempty"`
+	Production  bool   `json:"production,omitempty"` // a restore needs the namespace typed in
 }
 
 // Item is one thing a run saves: a database dump or a volume's tar.

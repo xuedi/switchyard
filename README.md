@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.9.0-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.10.0-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -68,8 +68,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.9.0/switchyard-0.9.0-linux-amd64
-install -m 0755 switchyard-0.9.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.10.0/switchyard-0.10.0-linux-amd64
+install -m 0755 switchyard-0.10.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -198,13 +198,18 @@ timestamp per run, in the set's time zone; a run without a manifest is incomplet
   step does not skip the after-hook; the run then fails without a manifest.
 - **Schedule:** a CronJob `switchyard-backup` made from the set, so backups run without
   switchyard; always hot (`--single-transaction`, `pg_dump`). **Cold** scales the namespace's
-  workloads (not its databases) to 0 for the backups started on the page.
+  workloads (not its databases) to 0 for the backups started on the page. A host backup can
+  skip namespaces by that name, so it stays as it is.
+- **A schedule that stops** shows in red on the start page and the backups page: the CronJob
+  suspended (with a button to resume it), the last scheduled run failed, or a slot passed more
+  than an hour ago without a run. The newest archive shows its age.
 - **Hooks:** a command run in a container made from a workload's pod spec, e.g. a maintenance
   mode on and off; its image needs `sh`.
 - **Retention:** every run of the 5 newest dates, then the earliest complete run of each month
   for 12 months; a run goes as a whole. switchyard writes `.switchyard` into its target: a
   pruner of the host's should skip such a directory.
-- **Restore** a run, all of it or single items: tick the warning that says what will happen. First a
+- **Restore** a run, all of it or single items: tick the warning that says what will happen (a
+  set marked **production** wants the namespace typed in instead). First a
   safety backup of the set (marked pre-restore; it can be skipped when the data is too broken
   for one), then the namespace's workloads go to 0 and its CronJobs are suspended, each database
   is dropped, created and imported as the restore user (root), each volume emptied (top-level

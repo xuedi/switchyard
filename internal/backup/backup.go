@@ -111,7 +111,15 @@ type Runner struct {
 	set      config.Backup
 	run      *Run
 	syncedAt time.Time
+	cron     cronSeen
 	stateMu  sync.Mutex
+}
+
+// cronSeen is the CronJob as the last sync found it.
+type cronSeen struct {
+	read      bool
+	suspended bool
+	since     time.Time // its last scheduled run, or its creation
 }
 
 func (r *Runner) Set() config.Backup {
@@ -572,6 +580,10 @@ func (r *Runner) scaleUp(ctx context.Context, run *Run, wait bool) {
 	for _, obj := range run.Suspended {
 		if _, err := r.k.Run(ctx, nil, r.ns(), "patch", "--type=merge", "-p", `{"spec":{"suspend":false}}`, "--", obj); err != nil {
 			r.logf("could not resume %s: %v", obj, err)
+		} else if obj == "cronjob/"+StateName {
+			r.mu.Lock()
+			r.cron.suspended = false
+			r.mu.Unlock()
 		}
 	}
 	if !wait {
@@ -787,12 +799,26 @@ func (r *Runner) Sync(ctx context.Context, force bool) error {
 
 func (r *Runner) applyCron(ctx context.Context) error {
 	b := r.Set()
-	var cur struct{ Metadata kube.Meta }
+	var cur struct {
+		Metadata kube.Meta
+		Spec     struct{ Suspend bool }
+		Status   struct{ LastScheduleTime time.Time }
+	}
 	err := r.k.Get(ctx, &cur, r.ns(), "get", "--", "cronjob", StateName)
 	exists := err == nil
 	if err != nil && !kube.IsNotFound(err) {
 		return err
 	}
+	seen := cronSeen{read: true, suspended: cur.Spec.Suspend, since: cur.Metadata.CreationTimestamp}
+	if cur.Status.LastScheduleTime.After(seen.since) {
+		seen.since = cur.Status.LastScheduleTime
+	}
+	if !exists {
+		seen.since = time.Now()
+	}
+	r.mu.Lock()
+	r.cron = seen
+	r.mu.Unlock()
 	if b.Schedule == "" {
 		if exists {
 			_, err := r.k.Run(ctx, nil, r.ns(), "delete", "--ignore-not-found", "--", "cronjob", StateName)
@@ -906,6 +932,66 @@ func later(a, b string) bool {
 	x, err1 := time.Parse(time.RFC3339, a)
 	y, err2 := time.Parse(time.RFC3339, b)
 	return err1 == nil && (err2 != nil || x.After(y))
+}
+
+// Health says what keeps the schedule from backing up, "" when nothing does; suspended: the
+// CronJob is, and no run of switchyard's holds it.
+func (r *Runner) Health(st State) (warning string, suspended bool) {
+	b := r.Set()
+	r.mu.Lock()
+	c, held := r.cron, r.run != nil
+	r.mu.Unlock()
+	if b.Schedule == "" || !c.read {
+		return "", false
+	}
+	if c.suspended {
+		if held {
+			return "", false
+		}
+		return "The schedule is suspended: no scheduled backup runs until it is resumed.", true
+	}
+	for _, run := range st.Runs {
+		if run.Kind == "scheduled" {
+			if run.Status == "failed" {
+				return "The last scheduled backup failed (" + stamp(run.Started) + "): see its log.", false
+			}
+			break
+		}
+	}
+	loc := time.UTC
+	if l, err := time.LoadLocation(b.TimeZone); err == nil && b.TimeZone != "" {
+		loc = l
+	}
+	// a missed slot may still start until startingDeadlineSeconds is over
+	due, ok := lastSlot(b.Schedule, time.Now().Add(-65*time.Minute).In(loc))
+	if ok && c.since.Before(due) {
+		return "No scheduled backup started since " + stamp(c.since.Format(time.RFC3339)) + ", one was due " +
+			stamp(due.Format(time.RFC3339)) + ".", false
+	}
+	return "", false
+}
+
+// Resume lifts the CronJob's suspension, unless a run holds it.
+func (r *Runner) Resume(ctx context.Context) error {
+	ns := r.ns()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.run != nil {
+		return Refused("a " + r.run.Kind + " holds the schedule; it resumes it when done")
+	}
+	if _, err := r.k.Run(ctx, nil, ns, "patch", "--type=merge", "-p", `{"spec":{"suspend":false}}`, "--", "cronjob", StateName); err != nil {
+		return err
+	}
+	r.cron.suspended = false
+	return nil
+}
+
+func stamp(t string) string {
+	x, err := time.Parse(time.RFC3339, t)
+	if err != nil {
+		return t
+	}
+	return x.Local().Format("2006-01-02 15:04")
 }
 
 // Remove deletes the CronJob; the archives and the ConfigMap stay.

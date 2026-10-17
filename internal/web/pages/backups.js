@@ -6,6 +6,8 @@ const when = iso => { if (!iso) return ""; const d = new Date(iso);
   return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`; };
 const took = (a, b) => { if (!a) return ""; const s = Math.max(0, Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 1000));
   return s >= 60 ? Math.floor(s / 60) + " min " + (s % 60) + " s" : s + " s"; };
+const ago = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+  return m < 60 ? m + " min ago" : m < 2880 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " days ago"; };
 const size = n => n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : n >= 1e3 ? Math.round(n / 1e3) + " kB" : n + " B";
 const params = new URLSearchParams(location.search);
 const ns = params.get("n") || "";
@@ -33,8 +35,10 @@ function render(v) {
   $("sub").textContent = "on " + v.Cluster + " · " + v.Time;
   const err = clickErr || v.Error || "";
   $("err").textContent = err; $("err").hidden = !err;
+  $("warntext").textContent = v.Warning || ""; $("warn").hidden = !v.Warning; $("resume").hidden = !v.Suspended;
   const s = v.Set;
   $("summary").innerHTML = `${(v.Archives || []).length} runs, ${size(v.Size || 0)} on <code>${esc(s.target)}</code>` +
+    (v.NewestAt ? `, the newest ${esc(ago(v.NewestAt))}` : "") +
     (s.schedule ? ` · scheduled <code>${esc(s.schedule)}</code> ${esc(s.timeZone || "UTC")}` : " · by hand only") +
     (s.cold ? " · cold" : "") + (v.IndexAt ? ` · listed ${esc(when(v.IndexAt))}` : "");
   $("now").disabled = $("refresh").disabled = v.Busy;
@@ -103,6 +107,7 @@ $("now").addEventListener("click", () => {
   post("backup/run" + q);
 });
 $("refresh").addEventListener("click", () => post("backup/refresh" + q));
+$("resume").addEventListener("click", () => post("backup/resume" + q));
 
 // --- restore ---
 
@@ -110,7 +115,9 @@ function openRestore(run) {
   const a = (last.Archives || []).find(x => x.Run === run);
   restoring = a;
   $("rtitle").textContent = "Restore " + run;
-  $("rconfirm").checked = false; $("rnosafety").checked = false;
+  $("rconfirm").checked = false; $("rnosafety").checked = false; $("rtype").value = "";
+  const prod = !!last.Set.production;
+  $("rconfirm").hidden = prod; $("rtyped").hidden = !prod; $("rns").textContent = ns;
   $("rimport").checked = a.Items.length === 0;
   renderPicks();
   $("restore").hidden = false;
@@ -146,13 +153,15 @@ function renderWarn() {
     : `<strong>I restore ${esc(ns)} from ${esc(restoring.Run)}:</strong> the app is scaled to 0 and its CronJobs suspended, ${list} ${items.length > 1 ? "are" : "is"} replaced by the archive's, then everything comes back. `
       + ($("rnosafety").checked ? `<strong>No safety backup: what is in ${list} now is lost for good.</strong>`
         : `First a safety backup of the whole set, marked pre-restore.`);
-  $("rconfirm").disabled = !items.length;
-  if (!items.length) $("rconfirm").checked = false;
-  $("rgo").disabled = !$("rconfirm").checked;
+  $("rconfirm").disabled = $("rtype").disabled = !items.length;
+  if (!items.length) { $("rconfirm").checked = false; $("rtype").value = ""; }
+  $("rgo").disabled = !confirmed();
 }
+function confirmed() { return last.Set.production ? $("rtype").value.trim() === ns : $("rconfirm").checked; }
 $("rimport").addEventListener("change", renderPicks);
 $("rnosafety").addEventListener("change", () => { $("rconfirm").checked = false; renderWarn(); });
 $("rconfirm").addEventListener("change", renderWarn);
+$("rtype").addEventListener("input", renderWarn);
 $("rpicks").addEventListener("change", renderWarn);
 $("rcancel").addEventListener("click", () => { $("restore").hidden = true; restoring = null; });
 $("archives").addEventListener("click", e => {
@@ -160,8 +169,8 @@ $("archives").addEventListener("click", e => {
   if (b && !b.disabled) openRestore(b.dataset.restore);
 });
 $("rgo").addEventListener("click", async () => {
-  if (!$("rconfirm").checked) return;
-  const body = {Run: restoring.Run, Confirm: ns, NoSafety: $("rnosafety").checked};
+  if (!confirmed()) return;
+  const body = {Run: restoring.Run, Confirm: ns, Typed: $("rtype").value.trim(), NoSafety: $("rnosafety").checked};
   if ($("rimport").checked) {
     body.Import = [...document.querySelectorAll("[data-imp]")].filter(s => s.value).map(s => {
       const p = document.querySelector(`[data-path="${CSS.escape(s.dataset.imp)}"]`);
@@ -210,7 +219,7 @@ async function openForm() {
     $("remove").hidden = !(last && last.Set && last.Set.target);
     $("target").innerHTML = `<option value="">-</option>` + sg.PVCs.map(p => `<option${p === set.target ? " selected" : ""}>${esc(p)}</option>`).join("");
     $("tools").value = set.tools || ""; $("schedule").value = set.schedule || ""; $("tz").value = set.timeZone || sg.TimeZone;
-    $("cold").checked = !!set.cold; $("daily").value = set.keepDaily || ""; $("monthly").value = set.keepMonthly || "";
+    $("cold").checked = !!set.cold; $("production").checked = !!set.production; $("daily").value = set.keepDaily || ""; $("monthly").value = set.keepMonthly || "";
     workloads($("beforew"), sg.Workloads || [], set.before && set.before.workload); $("beforec").value = set.before ? set.before.command : "";
     workloads($("afterw"), sg.Workloads || [], set.after && set.after.workload); $("afterc").value = set.after ? set.after.command : "";
     const key = it => it.kind + ":" + (it.kind === "volume" ? it.pvc + "/" + (it.subPath || "") : it.statefulSet || it.service);
@@ -233,7 +242,7 @@ function readForm() {
   return {
     namespace: ns, target: $("target").value, tools: $("tools").value.trim(),
     items: candidates.filter(it => it.on).map(({on, ...it}) => it),
-    schedule: $("schedule").value.trim(), timeZone: $("tz").value.trim(), cold: $("cold").checked,
+    schedule: $("schedule").value.trim(), timeZone: $("tz").value.trim(), cold: $("cold").checked, production: $("production").checked,
     before: hook("beforew", "beforec"), after: hook("afterw", "afterc"),
     keepDaily: num("daily"), keepMonthly: num("monthly"),
   };

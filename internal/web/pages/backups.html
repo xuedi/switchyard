@@ -19,6 +19,7 @@
   <div id="err" class="err" hidden></div>
 
   <div id="online" hidden>
+    <div id="warn" class="err" hidden><strong id="warntext"></strong> <button id="resume" class="plain" hidden>Resume the schedule</button></div>
     <div class="card">
       <h2>Archives</h2>
       <p class="muted" id="summary"></p>
@@ -39,6 +40,7 @@
       <label class="check"><input type="checkbox" id="rimport">The archive has another layout (an import): pick a file, and for a volume the directory in its tar, per item</label>
       <label class="check"><input type="checkbox" id="rnosafety">Without a safety backup (when the data is too broken for one)</label>
       <label class="check danger"><input type="checkbox" id="rconfirm"><span id="rwarn"></span></label>
+      <div id="rtyped" hidden><label for="rtype">A production set: type <code id="rns"></code> to restore it</label><input id="rtype" autocomplete="off" spellcheck="false"></div>
       <div class="buttons gap-t"><button id="rgo" class="stop">Restore</button><button id="rcancel" class="plain">Cancel</button></div>
     </div>
 
@@ -76,6 +78,7 @@
       <div><label for="tz">Time zone of the schedule and the names</label><input id="tz"></div>
     </div>
     <label class="check"><input type="checkbox" id="cold">Cold: a backup started here scales the app to 0 first (the databases stay up)</label>
+    <label class="check"><input type="checkbox" id="production">Production: a restore needs the namespace typed in, not a tick</label>
     <div class="grid">
       <div><label for="beforew">Before hook: workload</label><select id="beforew"></select></div>
       <div><label for="beforec">command (split at spaces, no shell)</label><input id="beforec" placeholder="e.g. bin/console maintenance:on"></div>

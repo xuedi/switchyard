@@ -257,6 +257,7 @@ func (s *Server) routes() http.Handler {
 	private("GET /backup/state", s.backupState)
 	private("POST /backup/run", func(w http.ResponseWriter, r *http.Request) { s.backupClick(w, r, "backup") })
 	private("POST /backup/refresh", func(w http.ResponseWriter, r *http.Request) { s.backupClick(w, r, "refresh") })
+	private("POST /backup/resume", func(w http.ResponseWriter, r *http.Request) { s.backupClick(w, r, "resume") })
 	private("POST /backup/restore", s.backupRestore)
 	private("GET /admin/backup", s.adminBackup)
 	private("POST /admin/backup", s.adminBackupSave)

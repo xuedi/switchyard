@@ -33,6 +33,9 @@ type BackupView struct {
 	Busy      bool
 	IndexAt   string
 	Size      int64
+	Warning   string // the schedule does not back up: why
+	Suspended bool   // its CronJob is suspended, and nothing of switchyard's holds it
+	NewestAt  string // the newest archive's time
 }
 
 // Archive is one run's files in the target.
@@ -116,6 +119,16 @@ func (s *Server) backupView(ns string) any {
 	}
 	v.Archives, v.Size = archives(set, st)
 	v.IndexAt = st.IndexAt
+	v.Warning, v.Suspended = run.Health(st)
+	if len(v.Archives) > 0 {
+		loc := time.UTC
+		if l, err := time.LoadLocation(set.TimeZone); err == nil && set.TimeZone != "" {
+			loc = l
+		}
+		if t, err := time.ParseInLocation("2006-01-02_15-04", v.Archives[0].Run, loc); err == nil {
+			v.NewestAt = t.Format(time.RFC3339)
+		}
+	}
 	for _, r := range st.Runs {
 		if r.Status == "running" && r.Kind == "scheduled" {
 			v.Busy = true
@@ -163,14 +176,17 @@ func (s *Server) backupState(w http.ResponseWriter, r *http.Request) {
 	w.Write(s.bsnap(set.Namespace).get())
 }
 
-// backupClick starts a backup now or a listing.
+// backupClick starts a backup now or a listing, or resumes the schedule.
 func (s *Server) backupClick(w http.ResponseWriter, r *http.Request, kind string) {
 	set, err := s.backupSet(r)
 	if err == nil {
 		run := s.bk().Runner(set)
-		if kind == "backup" {
+		switch kind {
+		case "backup":
 			err = run.Start(s.by(r))
-		} else {
+		case "resume":
+			err = run.Resume(r.Context())
+		default:
 			err = run.Refresh(s.by(r))
 		}
 	}
@@ -189,6 +205,7 @@ type restoreForm struct {
 	Import   []backup.Pick // or archives of another run, picked per item
 	NoSafety bool
 	Confirm  string // the namespace the page showed
+	Typed    string // the namespace typed in, for a production set
 }
 
 func (s *Server) backupRestore(w http.ResponseWriter, r *http.Request) {
@@ -216,6 +233,9 @@ func (s *Server) backupRestore(w http.ResponseWriter, r *http.Request) {
 func (s *Server) restore(r *http.Request, set config.Backup, f restoreForm) error {
 	if f.Confirm != set.Namespace {
 		return badRequest("the page shows another namespace: reload it")
+	}
+	if set.Production && f.Typed != set.Namespace {
+		return badRequest("a production set: type the namespace in to restore it")
 	}
 	if !runPrefix.MatchString(f.Run + "_x") {
 		return badRequest("no such run")

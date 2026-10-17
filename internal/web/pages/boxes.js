@@ -26,13 +26,17 @@ function boxRow(v) {
   </div>`;
 }
 
+const ago = iso => { const m = Math.max(0, Math.round((Date.now() - new Date(iso)) / 60000));
+  return m < 60 ? m + " min ago" : m < 2880 ? Math.round(m / 60) + " h ago" : Math.round(m / 1440) + " days ago"; };
+
 function backupRow(v) {
   const run = (v.Runs || [])[0], newest = (v.Archives || [])[0];
   const dot = !v.Online ? "" : v.Busy ? "busy" : "on";
   return `<div class="box">
     <span class="name"><span class="dot ${dot}"></span><a href="backups?n=${encodeURIComponent(v.Namespace)}">${esc(v.Namespace)}</a></span>
-    <span class="grow">${newest ? `newest <code>${esc(newest.Run)}</code>` : `<span class="muted">no archive yet</span>`}
+    <span class="grow">${newest ? `newest <code>${esc(newest.Run)}</code>${v.NewestAt ? ` <span class="muted">${esc(ago(v.NewestAt))}</span>` : ""}` : `<span class="muted">no archive yet</span>`}
       <span class="muted">${v.Set && v.Set.schedule ? "· " + esc(v.Set.schedule) : "· by hand"}</span>
+      ${v.Warning ? `<div class="failed">${esc(v.Warning)}</div>` : ""}
       ${v.Error ? `<div class="failed muted">${esc(v.Error)}</div>` : ""}</span>
     <span class="muted">${run ? `last ${esc(run.Kind)} <span class="${esc(run.Status)}">${esc(run.Status)}</span>` : ""}</span>
   </div>`;
