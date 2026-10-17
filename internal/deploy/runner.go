@@ -327,8 +327,8 @@ func PullSecrets(ctx context.Context, k kube.Kube, ns, deployment string) ([]str
 
 // --- starting and stopping ---
 
-// Start checks the click and starts the run in the background.
-func (r *Runner) Start(kind, tag string, allow bool) error {
+// Start checks the click and starts the run in the background; by goes into its log.
+func (r *Runner) Start(kind, tag string, allow bool, by string) error {
 	r.mu.Lock()
 	if r.run != nil {
 		r.mu.Unlock()
@@ -379,14 +379,15 @@ func (r *Runner) Start(kind, tag string, allow bool) error {
 		return Refused("a " + r.run.Kind + " is still running")
 	}
 	runCtx, runCancel := context.WithCancel(context.Background())
-	r.run = &Run{Kind: kind, Status: "running", Started: now(), From: live, To: tag, Allow: allow}
+	r.run = &Run{Kind: kind, Status: "running", Started: now(), From: live, To: tag, Allow: allow,
+		Log: []string{time.Now().Format("15:04:05") + " " + kind + " to " + tag + ", started by " + by}}
 	r.cancel, r.abortable = runCancel, kind != Rollback
 	go r.exec(runCtx)
 	return nil
 }
 
 // Abort stops a canary or a quick deploy before the original Deployment is touched.
-func (r *Runner) Abort() error {
+func (r *Runner) Abort(by string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.run == nil {
@@ -395,6 +396,7 @@ func (r *Runner) Abort() error {
 	if !r.abortable {
 		return Refused("too late to abort: the " + r.run.Kind + " is switching the Deployment")
 	}
+	r.run.Log = append(r.run.Log, time.Now().Format("15:04:05")+" abort by "+by)
 	r.cancel()
 	return nil
 }

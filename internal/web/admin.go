@@ -182,83 +182,81 @@ type boxForm struct {
 
 // adminSave adds or changes a box: the pull secret if one was given, the Role, the config.
 func (s *Server) adminSave(w http.ResponseWriter, r *http.Request) {
-	k, ctx, cancel, ok := s.adminCtx(w, r)
-	if !ok {
+	id, err := s.saveBox(r)
+	s.audit(r, s.store.Get().User, "box-saved", id, "", err)
+	if err != nil {
+		fail(w, err)
 		return
 	}
+	writeJSON(w, map[string]string{"Box": id})
+}
+
+func (s *Server) saveBox(r *http.Request) (string, error) {
+	k, err := s.admin()
+	if err != nil {
+		return "", badRequest(err.Error())
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
 	defer cancel()
 	var f boxForm
 	if err := json.NewDecoder(r.Body).Decode(&f); err != nil {
-		fail(w, badRequest(err.Error()))
-		return
+		return "", badRequest(err.Error())
 	}
 	b := f.Box
 	b.Namespace, b.Deployment = strings.TrimSpace(b.Namespace), strings.TrimSpace(b.Deployment)
 	if b.Namespace == "" || b.Deployment == "" {
-		fail(w, badRequest("pick a namespace and a Deployment"))
-		return
+		return b.ID(), badRequest("pick a namespace and a Deployment")
 	}
 	if err := checkNames(b.Namespace, b.Deployment, b.Container); err != nil {
-		fail(w, err)
-		return
+		return b.ID(), err
 	}
 	for _, f := range b.Followers {
 		kind, name, _ := strings.Cut(f, "/")
 		if kind != "cronjob" && kind != "deployment" || !kube.ValidName(name) {
-			fail(w, badRequest("a follower is cronjob/<name> or deployment/<name>, not "+f))
-			return
+			return b.ID(), badRequest("a follower is cronjob/<name> or deployment/<name>, not " + f)
 		}
 	}
 	if f.Original != "" {
 		if _, ok := s.store.Box(f.Original); !ok {
-			fail(w, badRequest("no such box "+f.Original))
-			return
+			return b.ID(), badRequest("no such box " + f.Original)
 		}
 	}
 	if b.Site != "" {
 		if u, err := url.Parse(b.Site); err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
-			fail(w, badRequest("the site is an http or https URL, not "+b.Site))
-			return
+			return b.ID(), badRequest("the site is an http or https URL, not " + b.Site)
 		}
 	}
 	if _, err := config.ParseLinks(b.Links); err != nil {
-		fail(w, badRequest(err.Error()))
-		return
+		return b.ID(), badRequest(err.Error())
 	}
 	for _, p := range b.Pages {
 		if !strings.HasPrefix(p, "/") {
-			fail(w, badRequest("a page is a path starting with /: "+p))
-			return
+			return b.ID(), badRequest("a page is a path starting with /: " + p)
 		}
 	}
 	if _, exists := s.store.Box(b.ID()); exists && f.Original != b.ID() {
-		fail(w, badRequest(b.ID()+" is a box already"))
-		return
+		return b.ID(), badRequest(b.ID() + " is a box already")
 	}
 	var d kube.Deployment
 	if err := k.Get(ctx, &d, "--namespace="+b.Namespace, "get", "--", "deployment", b.Deployment); err != nil {
-		fail(w, err)
-		return
+		return b.ID(), err
 	}
 	c, ok := d.Spec.Template.Spec.Pick(b.Container)
 	if !ok {
-		fail(w, badRequest("no container "+b.Container))
-		return
+		return b.ID(), badRequest("no container " + b.Container)
 	}
 	if f.RegistryToken != "" {
 		if err := addPullSecret(ctx, k, b.Namespace, d.Spec.Template.Spec.ServiceAccountName, registry.Parse(c.Image).Registry, f.RegistryUser, f.RegistryToken); err != nil {
-			fail(w, err)
-			return
+			return b.ID(), err
 		}
 	}
-	err := s.store.Update(func(cfg *config.Config) error {
+	err = s.store.Update(func(cfg *config.Config) error {
 		cfg.Boxes = slices.DeleteFunc(cfg.Boxes, func(x config.Box) bool { return x.ID() == f.Original || x.ID() == b.ID() })
 		cfg.Boxes = append(cfg.Boxes, b)
 		return nil
 	})
 	if err != nil {
-		fail(w, err)
-		return
+		return b.ID(), err
 	}
 	nss := []string{b.Namespace}
 	if old, _, _ := strings.Cut(f.Original, "/"); old != "" && old != b.Namespace {
@@ -266,42 +264,45 @@ func (s *Server) adminSave(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, ns := range nss {
 		if err := s.writeRole(ctx, k, ns); err != nil {
-			fail(w, err)
-			return
+			return b.ID(), err
 		}
 	}
-	writeJSON(w, map[string]string{"Box": b.ID()})
+	return b.ID(), nil
 }
 
 func (s *Server) adminRemove(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("b")
-	b, ok := s.store.Box(id)
-	if !ok {
-		fail(w, badRequest("no such box"))
-		return
-	}
-	k, ctx, cancel, ok := s.adminCtx(w, r)
-	if !ok {
-		return
-	}
-	defer cancel()
-	if cur, _ := s.eng().Runner(b).Current(); cur != nil {
-		fail(w, deploy.Refused("a "+cur.Kind+" is running"))
-		return
-	}
-	err := s.store.Update(func(cfg *config.Config) error {
-		cfg.Boxes = slices.DeleteFunc(cfg.Boxes, func(x config.Box) bool { return x.ID() == id })
-		return nil
-	})
+	err := s.removeBox(r, id)
+	s.audit(r, s.store.Get().User, "box-removed", id, "", err)
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	if err := s.writeRole(ctx, k, b.Namespace); err != nil {
-		fail(w, err)
-		return
-	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) removeBox(r *http.Request, id string) error {
+	b, ok := s.store.Box(id)
+	if !ok {
+		return badRequest("no such box")
+	}
+	k, err := s.admin()
+	if err != nil {
+		return badRequest(err.Error())
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Minute)
+	defer cancel()
+	if cur, _ := s.eng().Runner(b).Current(); cur != nil {
+		return deploy.Refused("a " + cur.Kind + " is running")
+	}
+	err = s.store.Update(func(cfg *config.Config) error {
+		cfg.Boxes = slices.DeleteFunc(cfg.Boxes, func(x config.Box) bool { return x.ID() == id })
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return s.writeRole(ctx, k, b.Namespace)
 }
 
 // addPullSecret stores the registry login as the Secret switchyard-pull and adds it to the

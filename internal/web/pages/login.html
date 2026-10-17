@@ -20,10 +20,6 @@
     <div class="buttons" style="margin-top:14px"><button>Log in</button></div>
   </form>
 </main>
-<script>
-const failed = new URLSearchParams(location.search).get("failed");
-document.getElementById("failed").hidden = failed !== "1";
-document.getElementById("locked").hidden = failed !== "locked";
-</script>
+<script src="login.js"></script>
 </body>
 </html>

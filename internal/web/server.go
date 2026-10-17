@@ -72,6 +72,8 @@ func Serve(version string, logo []byte, o Options) error {
 		listen = "127.0.0.1:8083"
 	}
 	s.listen = listen
+	srv := &http.Server{Addr: listen, Handler: s.routes(), ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout: 30 * time.Second, WriteTimeout: 3 * time.Minute, IdleTimeout: 2 * time.Minute}
 	log.Printf("switchyard %s listening on %s", version, listen)
 	switch {
 	case cfg != nil:
@@ -81,7 +83,7 @@ func Serve(version string, logo []byte, o Options) error {
 	default:
 		log.Printf("no %s yet: run switchyard setup", config.Path())
 	}
-	return http.ListenAndServe(listen, s.routes())
+	return srv.ListenAndServe()
 }
 
 // start brings up the engine on the scoped kubeconfig, and lets runs cut off by a restart go.
@@ -111,6 +113,8 @@ func page(name string) http.HandlerFunc {
 		switch {
 		case strings.HasSuffix(name, ".css"):
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		case strings.HasSuffix(name, ".js"):
+			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 		default:
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		}
@@ -195,12 +199,17 @@ func (s *Server) routes() http.Handler {
 	open("GET /login", page("login.html"))
 	open("POST /login", s.login)
 	open("POST /logout", func(w http.ResponseWriter, r *http.Request) {
+		if s.session(w, r) {
+			s.audit(r, s.store.Get().User, "logout", "", "", nil)
+		}
 		auth.ClearSession(w, s.trusted.https(r))
 		http.Redirect(w, r, "login", http.StatusSeeOther)
 	})
-	private("POST /logout/all", s.logoutAll)
+	private("POST /logout-all", s.logoutAll)
 	private("POST /password", s.password)
-	open("GET /style.css", page("style.css"))
+	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js"} {
+		open("GET /"+f, page(f))
+	}
 	open("GET /logo.svg", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
 		w.Write(s.logo)
@@ -227,7 +236,34 @@ func (s *Server) routes() http.Handler {
 	private("POST /admin/remove", s.adminRemove)
 
 	// A click is a real deploy: no other site may trigger one through the browser.
-	return http.NewCrossOriginProtection().Handler(mux)
+	return headers(http.NewCrossOriginProtection().Handler(mux))
+}
+
+// headers: no script but the pages' own, no framing by other sites, small bodies.
+func headers(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hd := w.Header()
+		hd.Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'")
+		hd.Set("X-Content-Type-Options", "nosniff")
+		hd.Set("Referrer-Policy", "same-origin")
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		h.ServeHTTP(w, r)
+	})
+}
+
+// audit logs one line per action: who, from where, what, on which box, the result.
+func (s *Server) audit(r *http.Request, user, action, box, tag string, err error) {
+	result := "ok"
+	if err != nil {
+		result = err.Error()
+	}
+	log.Printf("audit user=%q client=%s action=%s box=%q tag=%q result=%q", user, s.trusted.client(r), action, box, tag, result)
+}
+
+// by is the user and the client, for a run's log.
+func (s *Server) by(r *http.Request) string {
+	return s.store.Get().User + " from " + s.trusted.client(r)
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
@@ -241,13 +277,15 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return auth.Check(cfg.Hash, r.FormValue("password")) && user
 	})
 	if !ok {
-		why := "1"
+		why, msg := "1", "wrong user or password"
 		if locked {
-			why = "locked"
+			why, msg = "locked", "locked out"
 		}
+		s.audit(r, r.FormValue("user"), "login", "", "", errors.New(msg))
 		http.Redirect(w, r, "login?failed="+why, http.StatusSeeOther)
 		return
 	}
+	s.audit(r, cfg.User, "login", "", "", nil)
 	s.newSession(w, r, cfg)
 	http.Redirect(w, r, "./", http.StatusSeeOther)
 }
@@ -280,7 +318,9 @@ func (s *Server) session(w http.ResponseWriter, r *http.Request) bool {
 
 // logoutAll ends every session, this one too.
 func (s *Server) logoutAll(w http.ResponseWriter, r *http.Request) {
-	if err := s.store.Update(func(c *config.Config) error { c.Generation++; return nil }); err != nil {
+	err := s.store.Update(func(c *config.Config) error { c.Generation++; return nil })
+	s.audit(r, s.store.Get().User, "logout-everywhere", "", "", err)
+	if err != nil {
 		fail(w, err)
 		return
 	}
@@ -293,10 +333,11 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 	cfg := s.store.Get()
 	ok, locked := s.limiter.Try(s.trusted.client(r), func() bool { return auth.Check(cfg.Hash, r.FormValue("old")) })
 	if !ok {
-		why := "old"
+		why, msg := "old", "wrong password"
 		if locked {
-			why = "locked"
+			why, msg = "locked", "locked out"
 		}
+		s.audit(r, cfg.User, "password-change", "", "", errors.New(msg))
 		http.Redirect(w, r, "password?failed="+why, http.StatusSeeOther)
 		return
 	}
@@ -310,7 +351,9 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	if err := s.store.Update(func(c *config.Config) error { c.Hash = hash; c.Generation++; return nil }); err != nil {
+	err = s.store.Update(func(c *config.Config) error { c.Hash = hash; c.Generation++; return nil })
+	s.audit(r, cfg.User, "password-change", "", "", err)
+	if err != nil {
 		fail(w, err)
 		return
 	}
@@ -326,18 +369,18 @@ func (s *Server) click(w http.ResponseWriter, r *http.Request, kind string) {
 		return
 	}
 	run := s.eng().Runner(b)
+	tag := r.URL.Query().Get("tag")
 	var err error
 	if kind == "abort" {
-		err = run.Abort()
+		err = run.Abort(s.by(r))
 	} else {
-		err = run.Start(kind, r.URL.Query().Get("tag"), r.URL.Query().Get("allow") == "1")
+		err = run.Start(kind, tag, r.URL.Query().Get("allow") == "1", s.by(r))
 	}
+	s.audit(r, s.store.Get().User, kind, b.ID(), tag, err)
 	if err != nil {
-		log.Printf("%s: %s: %v", b.ID(), kind, err)
 		fail(w, err)
 		return
 	}
-	log.Printf("%s: %s %s", b.ID(), kind, r.URL.Query().Get("tag"))
 	s.snap(b.ID()).refresh()
 	w.WriteHeader(http.StatusNoContent)
 }
