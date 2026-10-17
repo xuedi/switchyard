@@ -5,14 +5,14 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.7.1-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.8.0-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
 </p>
 
 <p align="center"><b>The tiny canary and rollback tool for image-based apps on a small Kubernetes.</b><br>
-Your app pushes a tagged image; switchyard moves a Deployment from tag to tag.<br>
+Your app pushes a tagged image; switchyard moves a Deployment from tag to tag, and backs it up.<br>
 One Go binary next to kubectl. No operator, no CRDs, no router.</p>
 
 ---
@@ -39,6 +39,8 @@ registry gets a **Canary** and a **Deploy** button, every tag that went live a *
   pending-SQL command in the new image and stops on drops, renames and `NOT NULL` without a
   default, with a **Deploy anyway** for the planned last step. Then the migrate command, then
   the traffic.
+- **Backups and restores.** A namespace's databases and volumes as plain dated archives on a
+  PVC, on a schedule or by hand; a restore takes a safety backup first. See [Backups](#backups).
 - **Least privilege.** The setup creates a service account whose Role covers only what the
   boxes need, namespace by namespace; the admin context is used only to add a box.
 - **No load when nobody looks.** The page polls every second while it is open; all viewers share
@@ -66,8 +68,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.7.1/switchyard-0.7.1-linux-amd64
-install -m 0755 switchyard-0.7.1-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.8.0/switchyard-0.8.0-linux-amd64
+install -m 0755 switchyard-0.8.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -171,6 +173,51 @@ a comment change cannot be told from a type change. Split a destructive change: 
 thing, deploy, move the code over, deploy, then drop the old thing with **Deploy anyway** once
 no kept tag needs it. The tags table marks a tag that dropped something, and Roll back warns
 when it would cross one.
+
+## Backups
+
+switchyard also backs up and restores an app: a namespace's databases and volumes, as plain
+dated archives on a PVC. **Back up a namespace** on the start page; the form suggests the
+MariaDB and PostgreSQL StatefulSets (with their user, database and Secret keys read from the
+official images' variables) and the other PVCs.
+
+```
+<target>/2026-10-17_05-10_database.sql.zst   mariadb-dump --single-transaction | zstd
+<target>/2026-10-17_05-10_uploads.tar.zst    tar of the volume, its content at the root
+<target>/2026-10-17_05-10_manifest.json      written last: sizes, sha256, the images live
+```
+
+Plain files: `zstd -d < x.sql.zst | head` and `tar -t --zstd -f x.tar.zst` open them. One
+timestamp per run, in the set's time zone; a run without a manifest is incomplete.
+
+- **Where they go:** a PVC in the namespace that the cluster admin binds to a directory (a
+  static PV); switchyard only names it. Off-site copies are the host's job.
+- **How:** a Job per run, its steps in order: a before-hook, the dumps in each database's own
+  image (its dump tool matches the server), a `tar` per volume, an after-hook, then the manifest,
+  the retention and a listing of the target, which switchyard reads from the Job's log. A failed
+  step does not skip the after-hook; the run then fails without a manifest.
+- **Schedule:** a CronJob `switchyard-backup` made from the set, so backups run without
+  switchyard; always hot (`--single-transaction`, `pg_dump`). **Cold** scales the namespace's
+  workloads (not its databases) to 0 for the backups started on the page.
+- **Hooks:** a command run in a container made from a workload's pod spec, e.g. a maintenance
+  mode on and off; its image needs `sh`.
+- **Retention:** every run of the 5 newest dates, then the earliest complete run of each month
+  for 12 months; a run goes as a whole. switchyard writes `.switchyard` into its target: a
+  pruner of the host's should skip such a directory.
+- **Restore** a run, all of it or single items: type the namespace and your password. First a
+  safety backup of the set (marked pre-restore; it can be skipped when the data is too broken
+  for one), then the namespace's workloads go to 0 and its CronJobs are suspended, each database
+  is dropped, created and imported as the restore user (root), each volume emptied (top-level
+  excludes keep their content) and extracted, then the after-hook and everything back up.
+- **Import:** archives of another layout (from before switchyard) are restored file by file:
+  per item, which archive of the run and, for a tar, which directory in it (`app/data/images`).
+- **The tools image** runs the volume and listing steps: `sh`, `tar`, `zstd`, `sha256sum`; by
+  default the first MariaDB's image, which has them.
+- A backup or restore waits for a canary or deploy in the namespace, and the other way round.
+- **Assumed:** one node (the Job mounts the target and the volumes at once), and NetworkPolicies
+  that let a Job's pod reach the databases (its pods carry
+  `app.kubernetes.io/managed-by: switchyard`). The Jobs mount the namespace's PVCs and its
+  Secrets by reference: with backups, switchyard's Role is close to namespace admin.
 
 ## Development
 

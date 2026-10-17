@@ -25,7 +25,8 @@ type Config struct {
 	AdminContext    string `json:"adminContext"`              // used only to add a box in a new namespace
 	Cluster         string `json:"cluster"`                   // its name on the page
 
-	Boxes []Box `json:"boxes"`
+	Boxes   []Box    `json:"boxes"`
+	Backups []Backup `json:"backups,omitempty"`
 }
 
 // Box is one app: a Deployment whose image switchyard moves from tag to tag.
@@ -61,6 +62,84 @@ func (b Box) KeepOr() int {
 		return b.Keep
 	}
 	return 5
+}
+
+// Backup is a namespace's backup set: its databases and volumes, as dated archives on a PVC.
+type Backup struct {
+	Namespace   string `json:"namespace"`
+	Target      string `json:"target"` // the PVC the archives go to
+	Items       []Item `json:"items"`
+	Before      *Hook  `json:"before,omitempty"`
+	After       *Hook  `json:"after,omitempty"`
+	Cold        bool   `json:"cold,omitempty"`     // runs switchyard starts scale the app to 0 first
+	Schedule    string `json:"schedule,omitempty"` // cron, "" for by hand only; always hot
+	TimeZone    string `json:"timeZone,omitempty"`
+	Tools       string `json:"tools,omitempty"` // image with sh, tar, zstd, sha256sum; "" is the first database's
+	KeepDaily   int    `json:"keepDaily,omitempty"`
+	KeepMonthly int    `json:"keepMonthly,omitempty"`
+}
+
+// Item is one thing a run saves: a database dump or a volume's tar.
+type Item struct {
+	Name string `json:"name"` // in the file names: <ts>_<name>.sql.zst or .tar.zst
+	Kind string `json:"kind"` // mariadb, postgres or volume
+
+	Service     string `json:"service,omitempty"`
+	StatefulSet string `json:"statefulSet,omitempty"` // "" is the service's name; not scaled down
+	Database    string `json:"database,omitempty"`
+	User        string `json:"user,omitempty"`
+	Secret      string `json:"secret,omitempty"`
+	PasswordKey string `json:"passwordKey,omitempty"` // the user's password in the Secret
+	RootUser    string `json:"rootUser,omitempty"`    // restores: drops and creates the database
+	RootKey     string `json:"rootKey,omitempty"`
+
+	PVC     string   `json:"pvc,omitempty"`
+	SubPath string   `json:"subPath,omitempty"`
+	Exclude []string `json:"exclude,omitempty"`
+}
+
+func (i Item) Ext() string {
+	if i.Kind == "volume" {
+		return ".tar.zst"
+	}
+	return ".sql.zst"
+}
+
+func (i Item) RootUserOr() string {
+	switch {
+	case i.RootUser != "":
+		return i.RootUser
+	case i.Kind == "postgres":
+		return "postgres"
+	}
+	return "root"
+}
+
+func (i Item) StatefulSetOr() string {
+	if i.StatefulSet != "" {
+		return i.StatefulSet
+	}
+	return i.Service
+}
+
+// Hook is a command run in a container made from a workload's pod spec.
+type Hook struct {
+	Workload string `json:"workload"` // deployment/<name> or statefulset/<name>
+	Command  string `json:"command"`  // split at spaces, no shell
+}
+
+func (b Backup) KeepDailyOr() int {
+	if b.KeepDaily > 0 {
+		return b.KeepDaily
+	}
+	return 5
+}
+
+func (b Backup) KeepMonthlyOr() int {
+	if b.KeepMonthly > 0 {
+		return b.KeepMonthly
+	}
+	return 12
 }
 
 func Dir() string {
@@ -107,7 +186,21 @@ func (s *Store) Get() *Config {
 	}
 	c := *s.c
 	c.Boxes = append([]Box(nil), s.c.Boxes...)
+	c.Backups = append([]Backup(nil), s.c.Backups...)
 	return &c
+}
+
+func (s *Store) Backup(ns string) (Backup, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.c != nil {
+		for _, b := range s.c.Backups {
+			if b.Namespace == ns {
+				return b, true
+			}
+		}
+	}
+	return Backup{}, false
 }
 
 func (s *Store) Box(id string) (Box, bool) {
@@ -131,6 +224,7 @@ func (s *Store) Update(f func(c *Config) error) error {
 	if s.c != nil {
 		c = *s.c
 		c.Boxes = append([]Box(nil), s.c.Boxes...)
+		c.Backups = append([]Backup(nil), s.c.Backups...)
 	}
 	if err := f(&c); err != nil {
 		return err

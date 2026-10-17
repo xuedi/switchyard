@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/xuedi/switchyard/internal/auth"
+	"github.com/xuedi/switchyard/internal/backup"
 	"github.com/xuedi/switchyard/internal/config"
 	"github.com/xuedi/switchyard/internal/deploy"
 	"github.com/xuedi/switchyard/internal/kube"
@@ -33,9 +34,10 @@ type Server struct {
 	limiter    auth.Limiter
 	token      string // the installer's, printed by switchyard setup; "" keeps it closed
 
-	mu     sync.Mutex
-	engine *deploy.Engine
-	snaps  map[string]*snapshot
+	mu      sync.Mutex
+	engine  *deploy.Engine
+	backups *backup.Engine
+	snaps   map[string]*snapshot
 }
 
 // Options: how switchyard was started.
@@ -88,9 +90,11 @@ func Serve(version string, logo []byte, o Options) error {
 
 // start brings up the engine on the scoped kubeconfig, and lets runs cut off by a restart go.
 func (s *Server) start(cfg *config.Config) {
-	e := deploy.NewEngine(kube.Kube{Bin: cfg.Kubectl, Kubeconfig: config.Kubeconfig()})
+	k := kube.Kube{Bin: cfg.Kubectl, Kubeconfig: config.Kubeconfig()}
+	e := deploy.NewEngine(k)
+	bk := backup.NewEngine(k, s.boxBusy)
 	s.mu.Lock()
-	s.engine = e
+	s.engine, s.backups = e, bk
 	s.mu.Unlock()
 	for _, b := range cfg.Boxes {
 		go func() {
@@ -99,6 +103,20 @@ func (s *Server) start(cfg *config.Config) {
 			e.Runner(b).Recover(ctx)
 		}()
 	}
+	for _, set := range cfg.Backups {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			defer cancel()
+			bk.Runner(set).Recover(ctx)
+		}()
+	}
+	go s.syncBackups()
+}
+
+func (s *Server) bk() *backup.Engine {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.backups
 }
 
 func (s *Server) eng() *deploy.Engine {
@@ -132,9 +150,10 @@ func writeJSON(w http.ResponseWriter, v any) {
 func fail(w http.ResponseWriter, err error) {
 	code := http.StatusBadGateway
 	var ref deploy.Refused
+	var bref backup.Refused
 	var bad badRequest
 	switch {
-	case errors.As(err, &ref):
+	case errors.As(err, &ref) || errors.As(err, &bref):
 		code = http.StatusConflict
 	case errors.As(err, &bad):
 		code = http.StatusBadRequest
@@ -196,6 +215,7 @@ func (s *Server) routes() http.Handler {
 	})
 	privatePage("GET /box", "box.html")
 	privatePage("GET /password", "password.html")
+	privatePage("GET /backups", "backups.html")
 	open("GET /login", page("login.html"))
 	open("POST /login", s.login)
 	open("POST /logout", func(w http.ResponseWriter, r *http.Request) {
@@ -207,7 +227,7 @@ func (s *Server) routes() http.Handler {
 	})
 	private("POST /logout-all", s.logoutAll)
 	private("POST /password", s.password)
-	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js"} {
+	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js", "backups.js"} {
 		open("GET /"+f, page(f))
 	}
 	open("GET /logo.svg", func(w http.ResponseWriter, r *http.Request) {
@@ -234,6 +254,13 @@ func (s *Server) routes() http.Handler {
 	private("GET /admin/box", s.adminBox)
 	private("POST /admin/box", s.adminSave)
 	private("POST /admin/remove", s.adminRemove)
+	private("GET /backup/state", s.backupState)
+	private("POST /backup/run", func(w http.ResponseWriter, r *http.Request) { s.backupClick(w, r, "backup") })
+	private("POST /backup/refresh", func(w http.ResponseWriter, r *http.Request) { s.backupClick(w, r, "refresh") })
+	private("POST /backup/restore", s.backupRestore)
+	private("GET /admin/backup", s.adminBackup)
+	private("POST /admin/backup", s.adminBackupSave)
+	private("POST /admin/backup/remove", s.adminBackupRemove)
 
 	// A click is a real deploy: no other site may trigger one through the browser.
 	return headers(http.NewCrossOriginProtection().Handler(mux))
@@ -378,9 +405,12 @@ func (s *Server) click(w http.ResponseWriter, r *http.Request, kind string) {
 	run := s.eng().Runner(b)
 	tag := r.URL.Query().Get("tag")
 	var err error
-	if kind == "abort" {
+	switch {
+	case kind == "abort":
 		err = run.Abort(s.by(r))
-	} else {
+	case s.bk().Busy(b.Namespace) != "":
+		err = deploy.Refused(s.bk().Busy(b.Namespace) + " is running in " + b.Namespace + ": the " + kind + " waits for it")
+	default:
 		err = run.Start(kind, tag, r.URL.Query().Get("allow") == "1", s.by(r))
 	}
 	s.audit(r, s.store.Get().User, kind, b.ID(), tag, err)
@@ -423,5 +453,9 @@ func (s *Server) boxes(w http.ResponseWriter, r *http.Request) {
 	for _, b := range cfg.Boxes {
 		list = append(list, s.snap(b.ID()).get())
 	}
-	writeJSON(w, map[string]any{"Version": s.version, "Cluster": cfg.Cluster, "Boxes": list})
+	backups := []json.RawMessage{}
+	for _, set := range cfg.Backups {
+		backups = append(backups, s.bsnap(set.Namespace).get())
+	}
+	writeJSON(w, map[string]any{"Version": s.version, "Cluster": cfg.Cluster, "Boxes": list, "Backups": backups})
 }

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xuedi/switchyard/internal/backup"
 	"github.com/xuedi/switchyard/internal/config"
 	"github.com/xuedi/switchyard/internal/deploy"
 	"github.com/xuedi/switchyard/internal/kube"
@@ -380,9 +381,15 @@ func (s *Server) writeRole(ctx context.Context, k kube.Kube, ns string) error {
 			accounts = append(accounts, sa)
 		}
 	}
-	if len(states) == 0 {
+	_, hasBackup := s.store.Backup(ns)
+	if len(states) == 0 && !hasBackup {
 		_, err := k.Run(ctx, nil, "--namespace="+ns, "delete", "--ignore-not-found", "--", "rolebinding,role", accountName)
 		return err
+	}
+	cronVerbs := []string{"get", "list", "patch"}
+	if hasBackup {
+		states = append(states, backup.StateName)
+		cronVerbs = append(cronVerbs, "create", "update", "delete")
 	}
 	slices.Sort(secrets)
 	slices.Sort(accounts)
@@ -401,9 +408,15 @@ func (s *Server) writeRole(ctx context.Context, k kube.Kube, ns string) error {
 		rule("", []string{"pods/log"}, []string{"get"}),
 		rule("", []string{"pods/portforward"}, []string{"get", "create"}),
 		rule("batch", []string{"jobs"}, []string{"get", "list", "watch", "create", "delete"}),
-		rule("batch", []string{"cronjobs"}, []string{"get", "list", "patch"}),
+		rule("batch", []string{"cronjobs"}, cronVerbs),
 		rule("", []string{"configmaps"}, []string{"create"}),
 		rule("", []string{"configmaps"}, []string{"get", "patch", "update"}, states...),
+	}
+	if hasBackup {
+		rules = append(rules,
+			rule("apps", []string{"statefulsets"}, []string{"get", "list"}),
+			rule("apps", []string{"statefulsets/scale"}, []string{"get", "patch", "update"}),
+			rule("", []string{"persistentvolumeclaims"}, []string{"get", "list"}))
 	}
 	if len(secrets) > 0 {
 		rules = append(rules, rule("", []string{"secrets"}, []string{"get"}, slices.Compact(secrets)...))

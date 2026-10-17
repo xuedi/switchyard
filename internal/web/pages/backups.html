@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>switchyard backups</title>
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1><a href="./"><img src="logo.svg" alt="switchyard"></a> <span id="title">Backups</span> <small id="sub"></small></h1>
+
+  <div id="offline" class="card offline" hidden>
+    <h1 class="center"><span><span class="dot"></span><span id="cluster">The cluster</span> is offline</span></h1>
+    <p class="muted">Switched off, or still booting. This page notices when it is back.</p>
+  </div>
+
+  <div id="err" class="err" hidden></div>
+
+  <div id="online" hidden>
+    <div class="card">
+      <h2>Archives</h2>
+      <p class="muted" id="summary"></p>
+      <div class="buttons gap-b">
+        <button id="now">Back up now</button>
+        <button id="refresh" class="plain">Refresh the list</button>
+        <button id="edit" class="plain">Change the set</button>
+      </div>
+      <table>
+        <thead><tr><th>Run</th><th>Items</th><th class="hide-s">Size</th><th></th><th></th></tr></thead>
+        <tbody id="archives"></tbody>
+      </table>
+    </div>
+
+    <div class="card blocked" id="restore" hidden>
+      <h2 id="rtitle">Restore</h2>
+      <p>The app is scaled to 0 and its CronJobs suspended, the picked items are replaced by the archive's, then everything comes back. First a safety backup of the whole set, marked pre-restore.</p>
+      <div id="rpicks"></div>
+      <label class="check"><input type="checkbox" id="rimport">The archive has another layout (an import): pick a file, and for a volume the directory in its tar, per item</label>
+      <div class="grid">
+        <div><label for="rconfirm">Type <code id="rns"></code> to confirm</label><input id="rconfirm" autocomplete="off"></div>
+        <div><label for="rpw">Your password</label><input id="rpw" type="password" autocomplete="current-password"></div>
+      </div>
+      <label class="check"><input type="checkbox" id="rnosafety">Without a safety backup (when the data is too broken for one)</label>
+      <div class="buttons gap-t"><button id="rgo" class="stop">Restore</button><button id="rcancel" class="plain">Cancel</button></div>
+    </div>
+
+    <div class="card" id="runcard" hidden>
+      <h2 id="runtitle"></h2>
+      <div class="run">
+        <span class="status" id="status"></span>
+        <span id="what" class="muted"></span>
+        <span id="when" class="muted num"></span>
+      </div>
+      <p id="message" class="gap-b0"></p>
+      <pre id="log"></pre>
+    </div>
+
+    <div class="card">
+      <h2>Runs</h2>
+      <table>
+        <thead><tr><th>Run</th><th>Status</th><th class="hide-s">Started</th><th class="hide-s">Took</th><th>By</th></tr></thead>
+        <tbody id="runs"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" id="form" hidden>
+    <h2 id="formtitle">Back up this namespace</h2>
+    <p class="muted" id="mirror" hidden>A former switchyard left this set in the namespace: check it and save.</p>
+    <div class="grid">
+      <div><label for="target">Target PVC: where the archives go</label><select id="target"></select></div>
+      <div><label for="tools">Tools image (sh, tar, zstd, sha256sum)</label><input id="tools" placeholder="the first MariaDB's image"></div>
+    </div>
+    <label>Items</label>
+    <div id="items" class="muted">Loading...</div>
+    <div class="grid">
+      <div><label for="schedule">Schedule (cron, always hot; empty: by hand only)</label><input id="schedule" placeholder="10 5 * * *"></div>
+      <div><label for="tz">Time zone of the schedule and the names</label><input id="tz"></div>
+    </div>
+    <label class="check"><input type="checkbox" id="cold">Cold: a backup started here scales the app to 0 first (the databases stay up)</label>
+    <div class="grid">
+      <div><label for="beforew">Before hook: workload</label><select id="beforew"></select></div>
+      <div><label for="beforec">command (split at spaces, no shell)</label><input id="beforec" placeholder="e.g. bin/console maintenance:on"></div>
+      <div><label for="afterw">After hook: workload</label><select id="afterw"></select></div>
+      <div><label for="afterc">command, also after a restore</label><input id="afterc" placeholder="e.g. bin/console maintenance:off"></div>
+      <div><label for="daily">Every run of the newest dates</label><input id="daily" type="number" min="1" placeholder="5"></div>
+      <div><label for="monthly">Then one run a month, for months</label><input id="monthly" type="number" min="1" placeholder="12"></div>
+    </div>
+    <div id="formerr" class="err gap-t" hidden></div>
+    <div class="buttons gap-t">
+      <button id="save">Save</button>
+      <button id="cancel" class="plain">Cancel</button>
+      <button id="remove" class="plain">Stop backing up</button>
+      <span class="muted">Needs the admin context: it writes switchyard's Role in the namespace. Stopping removes the schedule; the archives stay.</span>
+    </div>
+  </div>
+  <p class="muted" id="ver"></p>
+</main>
+<script src="backups.js"></script>
+</body>
+</html>

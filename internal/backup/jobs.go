@@ -1,0 +1,403 @@
+package backup
+
+import (
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strings"
+
+	"github.com/xuedi/switchyard/internal/config"
+)
+
+// The Jobs a backup set runs, as pod specs: init containers in order, all on the target PVC.
+// A step never fails its container: it marks itself in /sy/failed and the next one runs, so the
+// after-hook always gets its turn; the last container fails the Job when anything is marked.
+
+const (
+	indexStart = "SWITCHYARD-INDEX"
+	indexEnd   = "SWITCHYARD-END"
+	runLine    = "SWITCHYARD-RUN"
+)
+
+// ItemName: what an item may be called, it goes into file names and scripts.
+var ItemName = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
+
+// DBName: a database or user name switchyard writes into SQL.
+var DBName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+func sq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// cluster is what a Job needs from the cluster, read when it is made.
+type cluster struct {
+	images map[string]string // item name -> its database's image
+	tools  string
+	hooks  map[string]*hookSpec
+	live   map[string]string // workload -> image, for the manifest
+}
+
+// hookSpec is a hook's container with what it needs from its workload's pod spec.
+type hookSpec struct {
+	container map[string]any
+	volumes   []any
+	pull      []any
+	account   string
+}
+
+type step struct {
+	name   string
+	image  string
+	script string
+	env    []any
+	mounts []any
+}
+
+func secretEnv(name, secret, key string) map[string]any {
+	return map[string]any{"name": name, "valueFrom": map[string]any{"secretKeyRef": map[string]any{"name": secret, "key": key}}}
+}
+
+func mount(name, path string, ro bool) map[string]any {
+	m := map[string]any{"name": name, "mountPath": path}
+	if ro {
+		m["readOnly"] = true
+	}
+	return m
+}
+
+func itemDir(n int, it config.Item) string {
+	d := fmt.Sprintf("/v/%d", n)
+	if it.SubPath != "" {
+		d += "/" + strings.Trim(it.SubPath, "/")
+	}
+	return d
+}
+
+// pod builds the pod spec: the steps as init containers, the last one as the container.
+func pod(b config.Backup, c cluster, steps []step, items []config.Item, rw bool) map[string]any {
+	volumes := []any{
+		map[string]any{"name": "sy-target", "persistentVolumeClaim": map[string]any{"claimName": b.Target}},
+		map[string]any{"name": "sy-run", "emptyDir": map[string]any{}},
+		map[string]any{"name": "sy-work", "emptyDir": map[string]any{}},
+	}
+	base := []any{mount("sy-target", "/target", false), mount("sy-run", "/sy", false), mount("sy-work", "/work", false)}
+	var itemMounts []any
+	for n, it := range items {
+		if it.Kind != "volume" {
+			continue
+		}
+		name := fmt.Sprintf("sy-v%d", n)
+		volumes = append(volumes, map[string]any{"name": name, "persistentVolumeClaim": map[string]any{"claimName": it.PVC, "readOnly": !rw}})
+		itemMounts = append(itemMounts, mount(name, fmt.Sprintf("/v/%d", n), !rw))
+	}
+	tz := b.TimeZone
+	if tz == "" {
+		tz = "UTC"
+	}
+	var containers []any
+	for _, s := range steps {
+		if h := c.hooks[s.name]; h != nil && s.image == "" {
+			hc := map[string]any{}
+			for k, v := range h.container {
+				hc[k] = v
+			}
+			hc["volumeMounts"] = append(append([]any{}, h.container["volumeMounts"].([]any)...), mount("sy-run", "/sy", false))
+			containers = append(containers, hc)
+			continue
+		}
+		mounts := append(append([]any{}, base...), itemMounts...)
+		containers = append(containers, map[string]any{
+			"name": s.name, "image": s.image, "command": []any{"sh", "-c", s.script},
+			"env":             append([]any{map[string]any{"name": "TZ", "value": tz}}, s.env...),
+			"volumeMounts":    mounts,
+			"securityContext": map[string]any{"allowPrivilegeEscalation": false},
+		})
+	}
+	spec := map[string]any{
+		"restartPolicy":  "Never",
+		"initContainers": containers[:len(containers)-1],
+		"containers":     containers[len(containers)-1:],
+		"volumes":        volumes,
+	}
+	var pull []any
+	for _, name := range []string{"before", "after"} {
+		h := c.hooks[name]
+		if h == nil {
+			continue
+		}
+		spec["volumes"] = append(spec["volumes"].([]any), h.volumes...)
+		pull = append(pull, h.pull...)
+		if h.account != "" {
+			spec["serviceAccountName"] = h.account
+		}
+	}
+	if len(pull) > 0 {
+		spec["imagePullSecrets"] = pull
+	}
+	return spec
+}
+
+// hookStep runs the hook's command; a failure marks it, the run goes on.
+func hookStep(name string) step { return step{name: name} }
+
+// newHook makes the hook's container from its workload's raw pod spec, with its own volume names.
+func newHook(name string, h *config.Hook, podSpec map[string]any) (*hookSpec, error) {
+	list, _ := podSpec["containers"].([]any)
+	if len(list) == 0 {
+		return nil, fmt.Errorf("%s has no container", h.Workload)
+	}
+	c, _ := list[0].(map[string]any)
+	prefix := "h" + name[:1] + "-"
+	var mounts []any
+	if ms, ok := c["volumeMounts"].([]any); ok {
+		for _, x := range ms {
+			if m, ok := x.(map[string]any); ok {
+				m["name"] = prefix + fmt.Sprint(m["name"])
+				mounts = append(mounts, m)
+			}
+		}
+	}
+	var volumes []any
+	if vs, ok := podSpec["volumes"].([]any); ok {
+		for _, x := range vs {
+			if v, ok := x.(map[string]any); ok {
+				v["name"] = prefix + fmt.Sprint(v["name"])
+				volumes = append(volumes, v)
+			}
+		}
+	}
+	sc, _ := c["securityContext"].(map[string]any)
+	if sc == nil {
+		sc = map[string]any{}
+	}
+	if psc, ok := podSpec["securityContext"].(map[string]any); ok {
+		for _, k := range []string{"runAsUser", "runAsGroup", "runAsNonRoot", "seccompProfile"} {
+			if _, set := sc[k]; !set && psc[k] != nil {
+				sc[k] = psc[k]
+			}
+		}
+	}
+	args := []any{"sh", "-c", `"$@" || { echo "` + name + ` hook failed"; touch /sy/failed/` + name + `-hook; }`, "hook"}
+	for _, a := range strings.Fields(h.Command) {
+		args = append(args, a)
+	}
+	hc := map[string]any{"name": name + "-hook", "image": c["image"], "command": args,
+		"volumeMounts": append([]any{}, mounts...), "securityContext": sc}
+	for _, k := range []string{"env", "envFrom", "workingDir", "resources"} {
+		if c[k] != nil {
+			hc[k] = c[k]
+		}
+	}
+	pull, _ := podSpec["imagePullSecrets"].([]any)
+	account, _ := podSpec["serviceAccountName"].(string)
+	return &hookSpec{container: hc, volumes: volumes, pull: pull, account: account}, nil
+}
+
+const startScript = `mkdir -p /sy/failed; date +%s > /sy/start
+while :; do TS=$(date +%Y-%m-%d_%H-%M); ls /target/"$TS"_* >/dev/null 2>&1 || break; echo "$TS is taken, waiting"; sleep 10; done
+echo "$TS" > /sy/ts; echo "run $TS"`
+
+// dumpStep dumps a database in its own image, through zstd into the target, or into /work when
+// the image has no zstd (the last step compresses it).
+func dumpStep(it config.Item, image string) step {
+	n, f := it.Name, `/target/"$TS"_`+it.Name+`.sql.zst`
+	fail := `touch /sy/failed/` + n
+	var dump string
+	env := []any{map[string]any{"name": "SVC", "value": it.Service}, map[string]any{"name": "DB", "value": it.Database},
+		map[string]any{"name": "DBUSER", "value": it.User}}
+	switch it.Kind {
+	case "mariadb":
+		dump = `"$(command -v mariadb-dump || command -v mysqldump)" --single-transaction -h "$SVC" -u "$DBUSER" "$DB"`
+		env = append(env, secretEnv("MYSQL_PWD", it.Secret, it.PasswordKey))
+	default:
+		dump = `pg_dump -h "$SVC" -U "$DBUSER" -d "$DB"`
+		env = append(env, secretEnv("PGPASSWORD", it.Secret, it.PasswordKey))
+	}
+	script := `TS=$(cat /sy/ts)
+if command -v zstd >/dev/null; then
+  { ` + dump + ` || ` + fail + `; } | zstd -q > ` + f + `.part || ` + fail + `
+  if [ -e /sy/failed/` + n + ` ]; then rm -f ` + f + `.part; echo "` + n + ` failed"; else mv ` + f + `.part ` + f + `; echo "` + n + ` $(wc -c < ` + f + `) bytes"; fi
+else
+  ` + dump + ` > /work/` + n + `.sql && echo "` + n + ` dumped, compressed at the end" || { ` + fail + `; echo "` + n + ` failed"; }
+fi`
+	return step{name: "dump-" + n, image: image, script: script, env: env}
+}
+
+func volumeStep(n int, it config.Item, tools string) step {
+	f := `/target/"$TS"_` + it.Name + `.tar.zst`
+	fail := `touch /sy/failed/` + it.Name
+	excl := ""
+	for _, e := range it.Exclude {
+		excl += " --exclude=" + sq(e)
+	}
+	// tar's 1 is "a file changed while it was read": fine for a hot backup
+	script := `TS=$(cat /sy/ts)
+cd ` + sq(itemDir(n, it)) + ` || { ` + fail + `; exit 0; }
+{ tar -cpf -` + excl + ` .; [ $? -le 1 ] || ` + fail + `; } | zstd -q > ` + f + `.part || ` + fail + `
+if [ -e /sy/failed/` + it.Name + ` ]; then rm -f ` + f + `.part; echo "` + it.Name + ` failed"; else mv ` + f + `.part ` + f + `; echo "` + it.Name + ` $(wc -c < ` + f + `) bytes"; fi`
+	return step{name: "tar-" + it.Name, image: tools, script: script}
+}
+
+const indexScript = `cd /target; echo ` + indexStart + `
+for f in *; do [ -f "$f" ] && printf 'F\t%s\t%s\n' "$f" "$(wc -c < "$f")"; done
+for f in *_manifest.json; do [ -f "$f" ] && printf 'M\t%s\t%s\n' "$f" "$(tr -d '\n\t' < "$f")"; done
+echo ` + indexEnd
+
+// pruneScript keeps every run of the newest daily dates, and of the older ones the earliest
+// complete run of each month for the newest monthly months; the rest goes, run by run. Complete:
+// a manifest, or (written before switchyard) every item of the set.
+const pruneScript = `ls -1 | sed -n 's/^\([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]_[0-9][0-9]-[0-9][0-9]\)_.*/\1/p' | sort -u > /sy/runs
+while read ts; do
+  c=0; [ -e "${ts}_manifest.json" ] && c=1
+  if [ $c = 0 ]; then c=1; for i in $ITEMS; do ls "${ts}_$i".* >/dev/null 2>&1 || c=0; done; fi
+  echo "$ts $c"
+done < /sy/runs | awk -v daily="$KEEP_DAILY" -v monthly="$KEEP_MONTHLY" '
+{ ts[NR] = $1; full[NR] = $2; d = substr($1, 1, 10); if (!(d in seen)) { seen[d] = 1; dates[++nd] = d } }
+END {
+  for (i = nd; i > nd - daily && i > 0; i--) recent[dates[i]] = 1
+  for (i = 1; i <= NR; i++) {
+    if (substr(ts[i], 1, 10) in recent) continue
+    m = substr(ts[i], 1, 7)
+    if (!(m in known)) { known[m] = 1; months[++nm] = m }
+    if (full[i] && !(m in mfull)) { mfull[m] = 1; keep[m] = ts[i] } else if (!(m in keep)) keep[m] = ts[i]
+  }
+  for (i = nm; i > nm - monthly && i > 0; i--) kept[months[i]] = 1
+  for (i = 1; i <= NR; i++) {
+    if (substr(ts[i], 1, 10) in recent) continue
+    m = substr(ts[i], 1, 7)
+    if (!(m in kept) || keep[m] != ts[i]) print ts[i]
+  }
+}' | while read ts; do echo "pruned $ts"; rm -f -- "$ts"_*; done`
+
+// lastStep compresses what waits in /work, then, if nothing failed, writes the manifest and
+// prunes; prints the index either way, then the run's line.
+func lastStep(b config.Backup, c cluster, kind string) step {
+	var names []string
+	for _, it := range b.Items {
+		names = append(names, it.Name)
+	}
+	live := "null"
+	if len(c.live) > 0 && kind != "scheduled" {
+		j, _ := json.Marshal(c.live)
+		live = string(j)
+	}
+	script := `TS=$(cat /sy/ts); cd /target
+for f in /work/*.sql; do [ -e "$f" ] || continue; n=$(basename "$f" .sql); zstd -q < "$f" > "$TS"_"$n".sql.zst && echo "$n compressed" || touch /sy/failed/"$n"; done
+touch .switchyard
+if [ -z "$(ls /sy/failed)" ]; then
+  { printf '{"run":"%s","kind":"%s","started":%s,"finished":%s,"items":[' "$TS" ` + sq(kind) + ` "$(cat /sy/start)" "$(date +%s)"
+    sep=""; for n in $ITEMS; do f=$(ls "$TS"_"$n".* | head -1)
+      printf '%s{"name":"%s","file":"%s","size":%s,"sha256":"%s"}' "$sep" "$n" "$f" "$(wc -c < "$f")" "$(sha256sum "$f" | cut -d' ' -f1)"; sep=","; done
+    printf '],"live":%s}\n' ` + sq(live) + `
+  } > "$TS"_manifest.json.part && mv "$TS"_manifest.json.part "$TS"_manifest.json
+  ` + pruneScript + `
+  ok=ok
+else
+  ok=failed; echo "failed: $(ls /sy/failed | tr '\n' ' ')"
+fi
+` + indexScript + `
+echo ` + runLine + ` "$TS" $ok
+[ $ok = ok ]`
+	env := []any{
+		map[string]any{"name": "ITEMS", "value": strings.Join(names, " ")},
+		map[string]any{"name": "KEEP_DAILY", "value": fmt.Sprint(b.KeepDailyOr())},
+		map[string]any{"name": "KEEP_MONTHLY", "value": fmt.Sprint(b.KeepMonthlyOr())},
+	}
+	return step{name: "finish", image: c.tools, script: script, env: env}
+}
+
+// runPod is a backup run: kind is manual, scheduled or pre-restore.
+func runPod(b config.Backup, c cluster, kind string) map[string]any {
+	steps := []step{{name: "start", image: c.tools, script: startScript}}
+	if b.Before != nil {
+		steps = append(steps, hookStep("before"))
+	}
+	for n, it := range b.Items {
+		if it.Kind == "volume" {
+			steps = append(steps, volumeStep(n, it, c.tools))
+		} else {
+			steps = append(steps, dumpStep(it, c.images[it.Name]))
+		}
+	}
+	if b.After != nil {
+		steps = append(steps, hookStep("after"))
+	}
+	steps = append(steps, lastStep(b, c, kind))
+	return pod(b, c, steps, b.Items, false)
+}
+
+// indexPod only lists the target.
+func indexPod(b config.Backup, c cluster) map[string]any {
+	return pod(b, c, []step{{name: "index", image: c.tools, script: indexScript}}, nil, false)
+}
+
+// Pick is one item of a restore: the archive, and for an import the directory inside a tar.
+type Pick struct {
+	Item string `json:"item"`
+	File string `json:"file"`
+	Path string `json:"path,omitempty"` // in the tar, e.g. app/data/images; "" is all of it
+}
+
+// restorePod restores the picked items: the dumps unpacked into /work, each database dropped,
+// created and imported as its restore user, each volume emptied and extracted. A failure stops
+// the rest; the after-hook runs anyway.
+func restorePod(b config.Backup, c cluster, picks []Pick, imp bool) map[string]any {
+	byName := map[string]int{}
+	for n, it := range b.Items {
+		byName[it.Name] = n
+	}
+	skip := `[ -z "$(ls /sy/failed)" ] || exit 0` + "\n"
+	prep := "mkdir -p /sy/failed\n"
+	var steps []step
+	for _, p := range picks {
+		n := byName[p.Item]
+		it := b.Items[n]
+		f := sq("/target/" + p.File)
+		fail := `{ touch /sy/failed/` + it.Name + `; echo "` + it.Name + ` failed"; }`
+		if it.Kind != "volume" {
+			prep += `zstd -dc ` + f + ` > /work/` + it.Name + `.sql && echo "` + it.Name + ` unpacked" || touch /sy/failed/` + it.Name + "\n"
+			env := []any{map[string]any{"name": "SVC", "value": it.Service}}
+			var script string
+			if it.Kind == "mariadb" {
+				env = append(env, secretEnv("MYSQL_PWD", it.Secret, it.RootKey))
+				script = skip + `C=$(command -v mariadb || command -v mysql)
+"$C" -h "$SVC" -u ` + sq(it.RootUserOr()) + ` -e 'DROP DATABASE IF EXISTS ` + "`" + it.Database + "`" + `; CREATE DATABASE ` + "`" + it.Database + "`" + `;' &&
+"$C" -h "$SVC" -u ` + sq(it.RootUserOr()) + ` ` + sq(it.Database) + ` < /work/` + it.Name + `.sql && echo "` + it.Name + ` restored" || ` + fail
+			} else {
+				env = append(env, secretEnv("PGPASSWORD", it.Secret, it.RootKey))
+				psql := `psql -v ON_ERROR_STOP=1 -q -o /dev/null -h "$SVC" -U ` + sq(it.RootUserOr())
+				script = skip + psql + ` -d postgres -c 'DROP DATABASE IF EXISTS "` + it.Database + `" WITH (FORCE)' -c 'CREATE DATABASE "` + it.Database + `" OWNER "` + it.User + `"' &&
+` + psql + ` -d ` + sq(it.Database) + ` -f /work/` + it.Name + `.sql && echo "` + it.Name + ` restored" || ` + fail
+			}
+			steps = append(steps, step{name: "restore-" + it.Name, image: c.images[it.Name], script: script, env: env})
+			continue
+		}
+		d := sq(itemDir(n, it))
+		tarArgs := ""
+		if p.Path != "" {
+			path := strings.Trim(p.Path, "/")
+			tarArgs = fmt.Sprintf(" --strip-components=%d %s", strings.Count(path, "/")+1, sq(path))
+		}
+		// a top-level exclude is not in the archive: it keeps what it has
+		keep := ""
+		for _, e := range it.Exclude {
+			if e = strings.TrimPrefix(e, "./"); e != "" && !strings.ContainsAny(e, "/*?[") {
+				keep += ` ! -name ` + sq(e)
+			}
+		}
+		script := skip + `mkdir -p ` + d + ` && own=$(stat -c %u:%g ` + d + `) &&
+find ` + d + ` -mindepth 1 -maxdepth 1` + keep + ` -exec rm -rf {} + && zstd -dc ` + f + ` | tar -C ` + d + ` -xpf -` + tarArgs + ` || ` + fail
+		if imp {
+			script += "\n" + `[ -e /sy/failed/` + it.Name + ` ] || chown -R "$own" ` + d
+		}
+		script += "\n" + `[ -e /sy/failed/` + it.Name + ` ] || echo "` + it.Name + ` restored"`
+		steps = append(steps, step{name: "restore-" + it.Name, image: c.tools, script: script})
+	}
+	steps = append([]step{{name: "unpack", image: c.tools, script: prep}}, steps...)
+	if b.After != nil {
+		steps = append(steps, hookStep("after"))
+	}
+	steps = append(steps, step{name: "finish", image: c.tools, script: `if [ -n "$(ls /sy/failed)" ]; then ok=failed; echo "failed: $(ls /sy/failed | tr '\n' ' ')"; else ok=ok; fi
+` + indexScript + `
+echo ` + runLine + ` restore $ok
+[ $ok = ok ]`})
+	return pod(b, c, steps, b.Items, true)
+}

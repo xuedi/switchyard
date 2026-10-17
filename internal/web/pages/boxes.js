@@ -26,6 +26,18 @@ function boxRow(v) {
   </div>`;
 }
 
+function backupRow(v) {
+  const run = (v.Runs || [])[0], newest = (v.Archives || [])[0];
+  const dot = !v.Online ? "" : v.Busy ? "busy" : "on";
+  return `<div class="box">
+    <span class="name"><span class="dot ${dot}"></span><a href="backups?n=${encodeURIComponent(v.Namespace)}">${esc(v.Namespace)}</a></span>
+    <span class="grow">${newest ? `newest <code>${esc(newest.Run)}</code>` : `<span class="muted">no archive yet</span>`}
+      <span class="muted">${v.Set && v.Set.schedule ? "· " + esc(v.Set.schedule) : "· by hand"}</span>
+      ${v.Error ? `<div class="failed muted">${esc(v.Error)}</div>` : ""}</span>
+    <span class="muted">${run ? `last ${esc(run.Kind)} <span class="${esc(run.Status)}">${esc(run.Status)}</span>` : ""}</span>
+  </div>`;
+}
+
 let lastHTML = "";
 async function poll() {
   try {
@@ -34,6 +46,7 @@ async function poll() {
     $("ver").textContent = "switchyard " + d.Version;
     const html = d.Boxes.length ? d.Boxes.map(boxRow).join("") : `<p class="muted">No box yet. A box is one Deployment: switchyard moves its image from tag to tag.</p>`;
     if (html !== lastHTML) { $("boxes").innerHTML = html; lastHTML = html; }
+    $("backups").innerHTML = (d.Backups || []).map(backupRow).join("") || `<p class="muted">No namespace backed up yet. A backup set saves a namespace's databases and volumes as dated archives on a PVC.</p>`;
   } catch (e) { /* keep the last list */ }
   setTimeout(poll, 3000);
 }
@@ -92,6 +105,17 @@ async function openForm(id) {
 }
 
 $("add").addEventListener("click", () => openForm(""));
+$("addbackup").addEventListener("click", async () => {
+  if (!$("bns").value) {
+    try {
+      const list = await getJSON("admin/namespaces");
+      $("bns").innerHTML = `<option value="">- namespace -</option>` + list.map(n => `<option>${esc(n)}</option>`).join("");
+      $("bns").hidden = false; $("addbackup").textContent = "Set it up";
+    } catch (e) { $("listerr").textContent = String(e.message || e); $("listerr").hidden = false; }
+    return;
+  }
+  location.href = "backups?edit=1&n=" + encodeURIComponent($("bns").value);
+});
 $("cancel").addEventListener("click", () => { $("form").hidden = true; });
 $("ns").addEventListener("change", () => loadDeployments("").catch(showErr));
 $("dep").addEventListener("change", () => loadDetails(null).catch(showErr));

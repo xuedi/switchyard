@@ -255,16 +255,19 @@ type Pod struct {
 			Type   string `json:"type"`
 			Status string `json:"status"`
 		} `json:"conditions"`
-		ContainerStatuses []struct {
-			RestartCount int `json:"restartCount"`
-			State        struct {
-				Waiting *struct {
-					Reason  string `json:"reason"`
-					Message string `json:"message"`
-				} `json:"waiting"`
-			} `json:"state"`
-		} `json:"containerStatuses"`
+		ContainerStatuses     []ContainerStatus `json:"containerStatuses"`
+		InitContainerStatuses []ContainerStatus `json:"initContainerStatuses"`
 	} `json:"status"`
+}
+
+type ContainerStatus struct {
+	RestartCount int `json:"restartCount"`
+	State        struct {
+		Waiting *struct {
+			Reason  string `json:"reason"`
+			Message string `json:"message"`
+		} `json:"waiting"`
+	} `json:"state"`
 }
 
 func (p Pod) Ready() bool {
@@ -286,7 +289,7 @@ func (p Pod) Restarts() int {
 
 // Waiting is why a container does not start, e.g. ImagePullBackOff, "" when none waits.
 func (p Pod) Waiting() string {
-	for _, c := range p.Status.ContainerStatuses {
+	for _, c := range append(p.Status.InitContainerStatuses, p.Status.ContainerStatuses...) {
 		if w := c.State.Waiting; w != nil && w.Reason != "ContainerCreating" && w.Reason != "PodInitializing" {
 			return strings.TrimSpace(w.Reason + " " + w.Message)
 		}
@@ -297,9 +300,12 @@ func (p Pod) Waiting() string {
 type Job struct {
 	Metadata Meta `json:"metadata"`
 	Status   struct {
-		Conditions []struct {
-			Type   string `json:"type"`
-			Status string `json:"status"`
+		StartTime      string `json:"startTime"`
+		CompletionTime string `json:"completionTime"`
+		Conditions     []struct {
+			Type               string `json:"type"`
+			Status             string `json:"status"`
+			LastTransitionTime string `json:"lastTransitionTime"`
 		} `json:"conditions"`
 	} `json:"status"`
 }
