@@ -31,6 +31,7 @@ type Server struct {
 	kubeconfig string // the installer's admin kubeconfig
 	trusted    proxies
 	limiter    auth.Limiter
+	token      string // the installer's, printed by switchyard setup; "" keeps it closed
 
 	mu     sync.Mutex
 	engine *deploy.Engine
@@ -66,13 +67,20 @@ func Serve(version string, logo []byte, o Options) error {
 		}
 	} else {
 		s.trusted, _ = parseProxies(nil)
-		log.Printf("no %s yet: open the page to set switchyard up", config.Path())
 	}
 	if listen == "" {
-		listen = "127.0.0.1:8080"
+		listen = "127.0.0.1:8083"
 	}
 	s.listen = listen
 	log.Printf("switchyard %s listening on %s", version, listen)
+	switch {
+	case cfg != nil:
+	case o.Setup:
+		s.token = auth.NewSecret()[:32]
+		log.Printf("to set switchyard up, open http://%s/?token=%s", listen, s.token)
+	default:
+		log.Printf("no %s yet: run switchyard setup", config.Path())
+	}
 	return http.ListenAndServe(listen, s.routes())
 }
 
@@ -137,11 +145,15 @@ func (b badRequest) Error() string { return string(b) }
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	open := func(pattern string, h http.HandlerFunc) { mux.HandleFunc(pattern, h) }
-	// before the setup only the installer, after it only with a session
+	// before the setup only the installer, with its token, after it only with a session
 	setup := func(pattern string, h http.HandlerFunc) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			if s.store.Get() != nil {
 				http.Error(w, "switchyard is set up already", http.StatusConflict)
+				return
+			}
+			if !s.setupToken(r.Header.Get("X-Setup-Token")) {
+				http.Error(w, "the installer needs the URL that switchyard setup printed", http.StatusForbidden)
 				return
 			}
 			h(w, r)
@@ -168,8 +180,10 @@ func (s *Server) routes() http.Handler {
 
 	open("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case s.store.Get() == nil:
+		case s.store.Get() == nil && s.setupToken(r.URL.Query().Get("token")):
 			page("setup.html")(w, r)
+		case s.store.Get() == nil:
+			http.Error(w, "switchyard is not set up: run switchyard setup and open the URL it prints", http.StatusForbidden)
 		case !s.session(w, r):
 			http.Redirect(w, r, "login", http.StatusSeeOther)
 		default:
@@ -237,6 +251,8 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	s.newSession(w, r, cfg)
 	http.Redirect(w, r, "./", http.StatusSeeOther)
 }
+
+func (s *Server) setupToken(t string) bool { return s.token != "" && auth.Same(t, s.token) }
 
 func (s *Server) newSession(w http.ResponseWriter, r *http.Request, cfg *config.Config) {
 	now := time.Now()

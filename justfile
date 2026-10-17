@@ -14,9 +14,13 @@ check:
     for p in amd64 arm64; do CGO_ENABLED=0 GOARCH=$p go build -o /dev/null . ; done
     CGO_ENABLED=0 GOARCH=arm GOARM=7 go build -o /dev/null .
 
-# Run it here (the installer on the first run): just run 127.0.0.1:8080
-run listen="127.0.0.1:8080":
+# Run it here: just run 127.0.0.1:8083 (just setup for the installer)
+run listen="127.0.0.1:8083":
     go run . serve -listen {{listen}}
+
+# The installer here; it prints its one-time URL
+setup listen="127.0.0.1:8083":
+    go run . setup -listen {{listen}}
 
 # Static binary for this machine
 build:

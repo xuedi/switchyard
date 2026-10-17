@@ -1,6 +1,7 @@
 // switchyard: canary deploys and rollbacks of image tags, for apps on a small Kubernetes cluster.
-// One binary, run as a user service next to kubectl: `switchyard setup` (or the first page
-// view) sets it up, then each box is one Deployment whose image switchyard moves from tag to tag.
+// One binary, run as a user service next to kubectl: `switchyard setup` sets it up (the
+// installer behind a one-time URL), then each box is one Deployment whose image switchyard moves
+// from tag to tag.
 // Standard library only.
 package main
 
@@ -25,8 +26,9 @@ func usage() {
 	fmt.Fprintf(os.Stderr, `switchyard %s: canary deploys and rollbacks of image tags
 
   switchyard setup [-listen addr] [-kubeconfig file]
-                                    the installer, on http://127.0.0.1:8080 by default, with
-                                    the cluster's admin kubeconfig (default ~/.kube/config)
+                                    the installer, on 127.0.0.1:8083 by default, with the
+                                    cluster's admin kubeconfig (default ~/.kube/config); it
+                                    prints the installer's one-time URL
   switchyard serve [-listen addr]   the pages
   switchyard version
 
@@ -40,7 +42,7 @@ func main() {
 		os.Exit(2)
 	}
 	fs := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
-	listen := fs.String("listen", "", "address to listen on, e.g. 127.0.0.1:8083 (default: the config's, or 127.0.0.1:8080)")
+	listen := fs.String("listen", "", "address to listen on (default: the config's, or 127.0.0.1:8083)")
 	var kubeconfig *string
 	if os.Args[1] == "setup" {
 		kubeconfig = fs.String("kubeconfig", "", "the cluster's admin kubeconfig (default: $KUBECONFIG or ~/.kube/config)")

@@ -144,7 +144,7 @@ func (s *Server) setupRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if f.Listen == "" {
-		f.Listen = "127.0.0.1:8080"
+		f.Listen = s.listen
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
 	defer cancel()

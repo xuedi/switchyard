@@ -29,7 +29,7 @@
       <div><label for="password">Password (8 or more)</label><input id="password" type="password" autocomplete="new-password"></div>
     </div>
     <label for="listen">Listen on</label>
-    <input id="listen" value="127.0.0.1:8080">
+    <input id="listen" value="127.0.0.1:8083">
     <p class="muted">Plain HTTP: keep it on 127.0.0.1 behind a reverse proxy with HTTPS, or on a trusted network.</p>
   </div>
 
@@ -49,9 +49,10 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"})[c]);
 let tested = false;
+const token = {"X-Setup-Token": new URLSearchParams(location.search).get("token") || ""};
 
 async function check() {
-  const r = await fetch("setup/check");
+  const r = await fetch("setup/check", {headers: token});
   const c = await r.json();
   const lines = [];
   lines.push(c.Kubectl ? `<span class="ok">kubectl</span> ${esc(c.KubectlVersion)} <code>${esc(c.Kubectl)}</code>` : `<span class="failed">${esc(c.KubectlError)}</span>`);
@@ -75,7 +76,7 @@ $("user").addEventListener("input", update);
 $("password").addEventListener("input", update);
 $("test").addEventListener("click", async () => {
   $("testmsg").textContent = "Testing...";
-  const r = await fetch("setup/test", {method: "POST", body: JSON.stringify(form())});
+  const r = await fetch("setup/test", {method: "POST", headers: token, body: JSON.stringify(form())});
   const t = await r.json();
   tested = t.OK;
   $("testmsg").innerHTML = `<span class="${t.OK ? "ok" : "failed"}">${esc(t.Message)}</span>`;
@@ -84,7 +85,7 @@ $("test").addEventListener("click", async () => {
 $("go").addEventListener("click", async () => {
   $("go").disabled = true; $("err").hidden = true;
   $("go").textContent = "Setting up...";
-  const r = await fetch("setup", {method: "POST", body: JSON.stringify(form())});
+  const r = await fetch("setup", {method: "POST", headers: token, body: JSON.stringify(form())});
   $("go").textContent = "Set up";
   if (!r.ok) { $("err").textContent = await r.text(); $("err").hidden = false; update(); return; }
   const d = await r.json();
