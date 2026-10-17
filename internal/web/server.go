@@ -175,7 +175,7 @@ func (s *Server) routes() http.Handler {
 	privatePage := func(pattern, name string) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			if !s.session(w, r) {
-				http.Redirect(w, r, "./", http.StatusSeeOther)
+				redirect(w, "./")
 				return
 			}
 			page(name)(w, r)
@@ -189,7 +189,7 @@ func (s *Server) routes() http.Handler {
 		case s.store.Get() == nil:
 			http.Error(w, "switchyard is not set up: run switchyard setup and open the URL it prints", http.StatusForbidden)
 		case !s.session(w, r):
-			http.Redirect(w, r, "login", http.StatusSeeOther)
+			redirect(w, "login")
 		default:
 			page("boxes.html")(w, r)
 		}
@@ -203,7 +203,7 @@ func (s *Server) routes() http.Handler {
 			s.audit(r, s.store.Get().User, "logout", "", "", nil)
 		}
 		auth.ClearSession(w, s.trusted.https(r))
-		http.Redirect(w, r, "login", http.StatusSeeOther)
+		redirect(w, "login")
 	})
 	private("POST /logout-all", s.logoutAll)
 	private("POST /password", s.password)
@@ -269,7 +269,7 @@ func (s *Server) by(r *http.Request) string {
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	cfg := s.store.Get()
 	if cfg == nil {
-		http.Redirect(w, r, "./", http.StatusSeeOther)
+		redirect(w, "./")
 		return
 	}
 	ok, locked := s.limiter.Try(s.trusted.client(r), func() bool {
@@ -282,12 +282,19 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 			why, msg = "locked", "locked out"
 		}
 		s.audit(r, r.FormValue("user"), "login", "", "", errors.New(msg))
-		http.Redirect(w, r, "login?failed="+why, http.StatusSeeOther)
+		redirect(w, "login?failed="+why)
 		return
 	}
 	s.audit(r, cfg.User, "login", "", "", nil)
 	s.newSession(w, r, cfg)
-	http.Redirect(w, r, "./", http.StatusSeeOther)
+	redirect(w, "./")
+}
+
+// redirect sends the relative Location as it is: http.Redirect makes it absolute, which leaves
+// a reverse proxy's prefix.
+func redirect(w http.ResponseWriter, to string) {
+	w.Header().Set("Location", to)
+	w.WriteHeader(http.StatusSeeOther)
 }
 
 func (s *Server) setupToken(t string) bool { return s.token != "" && auth.Same(t, s.token) }
@@ -325,7 +332,7 @@ func (s *Server) logoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	auth.ClearSession(w, s.trusted.https(r))
-	http.Redirect(w, r, "login", http.StatusSeeOther)
+	redirect(w, "login")
 }
 
 // password changes the password and ends every other session.
@@ -338,12 +345,12 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 			why, msg = "locked", "locked out"
 		}
 		s.audit(r, cfg.User, "password-change", "", "", errors.New(msg))
-		http.Redirect(w, r, "password?failed="+why, http.StatusSeeOther)
+		redirect(w, "password?failed="+why)
 		return
 	}
 	pw := r.FormValue("new")
 	if len(pw) < 8 || pw != r.FormValue("again") {
-		http.Redirect(w, r, "password?failed=new", http.StatusSeeOther)
+		redirect(w, "password?failed=new")
 		return
 	}
 	hash, err := auth.Hash(pw)
@@ -358,7 +365,7 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.newSession(w, r, s.store.Get())
-	http.Redirect(w, r, "password?changed=1", http.StatusSeeOther)
+	redirect(w, "password?changed=1")
 }
 
 // click starts a run (or aborts one): 204, or the reason as text.
