@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -43,10 +44,7 @@ type checkResult struct {
 func (s *Server) setupCheck(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
-	res := checkResult{Kubeconfig: r.URL.Query().Get("kubeconfig")}
-	if res.Kubeconfig == "" {
-		res.Kubeconfig = defaultKubeconfig()
-	}
+	res := checkResult{Kubeconfig: s.kubeconfig, Listen: s.listen}
 	bin, err := kube.Find()
 	if err != nil {
 		res.KubectlError = err.Error() + ". Install it (https://kubernetes.io/docs/tasks/tools/), then reload this page."
@@ -63,17 +61,16 @@ func (s *Server) setupCheck(w http.ResponseWriter, r *http.Request) {
 		res.KubectlVersion = v.ClientVersion.GitVersion
 	}
 	if _, err := os.Stat(res.Kubeconfig); err != nil {
-		res.KubeconfigError = "no kubeconfig at " + res.Kubeconfig + ": copy the cluster's admin kubeconfig there, or name another file"
+		res.KubeconfigError = "no kubeconfig at " + res.Kubeconfig + ": copy the cluster's admin kubeconfig there, or name another one with switchyard setup -kubeconfig <file>"
 		writeJSON(w, res)
 		return
 	}
-	out, err := k.Run(ctx, nil, "config", "get-contexts", "-o", "name")
+	res.Contexts, err = contexts(ctx, k)
 	if err != nil {
 		res.KubeconfigError = err.Error()
 		writeJSON(w, res)
 		return
 	}
-	res.Contexts = strings.Fields(string(out))
 	cur, _ := k.Run(ctx, nil, "config", "current-context")
 	res.Current = strings.TrimSpace(string(cur))
 	writeJSON(w, res)
@@ -85,10 +82,22 @@ type setupForm struct {
 	Listen              string
 }
 
-// setupTest: the context answers, and may create what switchyard needs.
-func (s *Server) setupTest(w http.ResponseWriter, r *http.Request) {
+func contexts(ctx context.Context, k kube.Kube) ([]string, error) {
+	out, err := k.Run(ctx, nil, "config", "get-contexts", "-o", "name")
+	return strings.Fields(string(out)), err
+}
+
+// form reads the installer's form; the kubeconfig is always the one switchyard was started with.
+func (s *Server) form(r *http.Request) setupForm {
 	var f setupForm
 	json.NewDecoder(r.Body).Decode(&f)
+	f.Kubeconfig = s.kubeconfig
+	return f
+}
+
+// setupTest: the context answers, and may create what switchyard needs.
+func (s *Server) setupTest(w http.ResponseWriter, r *http.Request) {
+	f := s.form(r)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	msg, err := testAdmin(ctx, f)
@@ -109,6 +118,9 @@ func testAdmin(ctx context.Context, f setupForm) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if list, err := contexts(ctx, k); err != nil || !slices.Contains(list, f.Context) {
+		return "", fmt.Errorf("%s has no context %q", f.Kubeconfig, f.Context)
+	}
 	out, err := k.Run(ctx, nil, "get", "namespaces", "-o", "name")
 	if err != nil {
 		return "", err
@@ -125,8 +137,7 @@ func testAdmin(ctx context.Context, f setupForm) (string, error) {
 // setupRun does the setup: switchyard's service account and its token in the namespace
 // switchyard, the scoped kubeconfig, config.json, the systemd unit.
 func (s *Server) setupRun(w http.ResponseWriter, r *http.Request) {
-	var f setupForm
-	json.NewDecoder(r.Body).Decode(&f)
+	f := s.form(r)
 	f.User = strings.TrimSpace(f.User)
 	if f.User == "" || len(f.Password) < 8 {
 		fail(w, badRequest("a user name and a password of at least 8 characters, please"))
@@ -193,7 +204,7 @@ func writeKubeconfig(ctx context.Context, admin kube.Kube) (string, error) {
 		var sec struct {
 			Data map[string][]byte `json:"data"`
 		}
-		if err := admin.Get(ctx, &sec, "-n", accountNS, "get", "secret", accountName+"-token"); err != nil {
+		if err := admin.Get(ctx, &sec, "--namespace="+accountNS, "get", "--", "secret", accountName+"-token"); err != nil {
 			return "", err
 		}
 		token = string(sec.Data["token"])

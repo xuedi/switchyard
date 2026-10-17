@@ -21,7 +21,7 @@ const sqlMarker = "----- switchyard: pending SQL -----"
 func (r *Runner) deployment(ctx context.Context) (kube.Deployment, kube.Container, error) {
 	b := r.Box()
 	var d kube.Deployment
-	if err := r.k.Get(ctx, &d, "-n", b.Namespace, "get", "deployment", b.Deployment); err != nil {
+	if err := r.k.Get(ctx, &d, "--namespace="+b.Namespace, "get", "--", "deployment", b.Deployment); err != nil {
 		return d, kube.Container{}, err
 	}
 	c, ok := d.Spec.Template.Spec.Pick(b.Container)
@@ -33,7 +33,7 @@ func (r *Runner) deployment(ctx context.Context) (kube.Deployment, kube.Containe
 
 func (r *Runner) raw(ctx context.Context, what string) (map[string]any, error) {
 	var m map[string]any
-	err := r.k.Get(ctx, &m, "-n", r.Box().Namespace, "get", what)
+	err := r.k.Get(ctx, &m, "--namespace="+r.Box().Namespace, "get", "--", what)
 	return m, err
 }
 
@@ -191,7 +191,7 @@ func (r *Runner) job(ctx context.Context, what, tag string, command []string) (s
 	}
 	r.logf("job %s started", name)
 	stop := func() {
-		r.k.Run(context.Background(), nil, "-n", b.Namespace, "delete", "job", name, "--ignore-not-found", "--wait=false")
+		r.k.Run(context.Background(), nil, "--namespace="+b.Namespace, "delete", "--ignore-not-found", "--wait=false", "--", "job", name)
 	}
 	stuckSince := time.Time{}
 	for {
@@ -202,21 +202,21 @@ func (r *Runner) job(ctx context.Context, what, tag string, command []string) (s
 		case <-time.After(2 * time.Second):
 		}
 		var j kube.Job
-		if err := r.k.Get(ctx, &j, "-n", b.Namespace, "get", "job", name); err != nil {
+		if err := r.k.Get(ctx, &j, "--namespace="+b.Namespace, "get", "--", "job", name); err != nil {
 			if ctx.Err() != nil {
 				continue
 			}
 			return "", err
 		}
 		if phase := j.Phase(); phase != "running" {
-			out, _ := r.k.Run(context.WithoutCancel(ctx), nil, "-n", b.Namespace, "logs", "job/"+name, "--tail=-1")
+			out, _ := r.k.Run(context.WithoutCancel(ctx), nil, "--namespace="+b.Namespace, "logs", "--tail=-1", "--", "job/"+name)
 			if phase == "failed" {
 				return string(out), fmt.Errorf("job %s failed", name)
 			}
 			return string(out), nil
 		}
 		var pods struct{ Items []kube.Pod }
-		if r.k.Get(ctx, &pods, "-n", b.Namespace, "get", "pods", "-l", "job-name="+name) == nil {
+		if r.k.Get(ctx, &pods, "--namespace="+b.Namespace, "get", "pods", "-l", "job-name="+name) == nil {
 			waiting := ""
 			for _, p := range pods.Items {
 				if w := p.Waiting(); strings.Contains(w, "ImagePull") || strings.Contains(w, "ErrImage") || strings.Contains(w, "CreateContainerConfigError") {
@@ -249,18 +249,18 @@ func (r *Runner) setImage(ctx context.Context, obj, tag string) error {
 	var spec kube.PodSpec
 	if strings.HasPrefix(obj, "cronjob/") {
 		var cj kube.CronJob
-		if err := r.k.Get(ctx, &cj, "-n", b.Namespace, "get", obj); err != nil {
+		if err := r.k.Get(ctx, &cj, "--namespace="+b.Namespace, "get", "--", obj); err != nil {
 			return err
 		}
 		spec = cj.Spec.JobTemplate.Spec.Template.Spec
 	} else {
 		var d kube.Deployment
-		if err := r.k.Get(ctx, &d, "-n", b.Namespace, "get", obj); err != nil {
+		if err := r.k.Get(ctx, &d, "--namespace="+b.Namespace, "get", "--", obj); err != nil {
 			return err
 		}
 		spec = d.Spec.Template.Spec
 	}
-	args := []string{"-n", b.Namespace, "set", "image", obj}
+	args := []string{"--namespace=" + b.Namespace, "set", "image", "--", obj}
 	for _, c := range spec.Containers {
 		if p := registry.Parse(c.Image); p.Registry == repo.Registry && p.Repo == repo.Repo {
 			args = append(args, c.Name+"="+registry.WithTag(c.Image, tag))
@@ -274,7 +274,7 @@ func (r *Runner) setImage(ctx context.Context, obj, tag string) error {
 }
 
 func (r *Runner) rollout(ctx context.Context, deployment string) error {
-	_, err := r.k.Run(ctx, nil, "-n", r.Box().Namespace, "rollout", "status", "deployment/"+deployment, "--timeout=600s", "--request-timeout=0")
+	_, err := r.k.Run(ctx, nil, "--namespace="+r.Box().Namespace, "rollout", "status", "--timeout=600s", "--request-timeout=0", "--", "deployment/"+deployment)
 	return err
 }
 
@@ -340,7 +340,7 @@ func (r *Runner) canary(ctx context.Context, from, tag string) error {
 		"metadata": map[string]any{"name": name, "namespace": b.Namespace, "labels": labels}, "spec": spec}
 
 	remove := func() {
-		r.k.Run(context.Background(), nil, "-n", b.Namespace, "delete", "deployment", name, "--ignore-not-found")
+		r.k.Run(context.Background(), nil, "--namespace="+b.Namespace, "delete", "--ignore-not-found", "--", "deployment", name)
 	}
 	remove()
 	body, _ := json.Marshal(copyObj)
@@ -358,7 +358,7 @@ func (r *Runner) canary(ctx context.Context, from, tag string) error {
 	for i, pods := range steps {
 		if i > 0 {
 			r.step(ctx, "half", "canary: %d pods of %s next to %d of %s, about half the traffic", pods, tag, n, from)
-			if _, err := r.k.Run(ctx, nil, "-n", b.Namespace, "scale", "deployment/"+name, fmt.Sprintf("--replicas=%d", pods)); err != nil {
+			if _, err := r.k.Run(ctx, nil, "--namespace="+b.Namespace, "scale", fmt.Sprintf("--replicas=%d", pods), "--", "deployment/"+name); err != nil {
 				return err
 			}
 		}
@@ -392,14 +392,14 @@ func (r *Runner) waitReady(ctx context.Context, name, selector string) error {
 	deadline := time.Now().Add(10 * time.Minute)
 	for {
 		var d kube.Deployment
-		if err := r.k.Get(ctx, &d, "-n", b.Namespace, "get", "deployment", name); err != nil {
+		if err := r.k.Get(ctx, &d, "--namespace="+b.Namespace, "get", "--", "deployment", name); err != nil {
 			return err
 		}
 		if d.Status.ReadyReplicas >= d.Replicas() && d.Status.UpdatedReplicas >= d.Replicas() {
 			return nil
 		}
 		var pods struct{ Items []kube.Pod }
-		if r.k.Get(ctx, &pods, "-n", b.Namespace, "get", "pods", "-l", selector) == nil {
+		if r.k.Get(ctx, &pods, "--namespace="+b.Namespace, "get", "pods", "-l", selector) == nil {
 			for _, p := range pods.Items {
 				if w := p.Waiting(); strings.Contains(w, "ErrImage") || strings.Contains(w, "CrashLoopBackOff") || strings.Contains(w, "CreateContainerConfigError") {
 					if time.Since(p.Metadata.CreationTimestamp) > 3*time.Minute {
@@ -422,7 +422,7 @@ func (r *Runner) waitReady(ctx context.Context, name, selector string) error {
 // pods returns the ready pods of a selector and their restarts.
 func (r *Runner) pods(ctx context.Context, selector string) ([]kube.Pod, int, error) {
 	var list struct{ Items []kube.Pod }
-	if err := r.k.Get(ctx, &list, "-n", r.Box().Namespace, "get", "pods", "-l", selector); err != nil {
+	if err := r.k.Get(ctx, &list, "--namespace="+r.Box().Namespace, "get", "pods", "-l", selector); err != nil {
 		return nil, 0, err
 	}
 	var ready []kube.Pod
@@ -507,7 +507,7 @@ func (r *Runner) watch(ctx context.Context, origLabels map[string]string, name s
 			return 1
 		}
 		var d kube.Deployment
-		if err := r.k.Get(ctx, &d, "-n", b.Namespace, "get", "deployment", name); err != nil || d.Status.ReadyReplicas < d.Replicas() {
+		if err := r.k.Get(ctx, &d, "--namespace="+b.Namespace, "get", "--", "deployment", name); err != nil || d.Status.ReadyReplicas < d.Replicas() {
 			r.logf("the canary is not healthy: %d of %d pods ready %v", d.Status.ReadyReplicas, d.Replicas(), errOrEmpty(err))
 			return 1
 		}

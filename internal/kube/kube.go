@@ -62,15 +62,16 @@ func Find() (string, error) {
 func (k Kube) args(args []string) []string {
 	var a []string
 	if k.Kubeconfig != "" {
-		a = append(a, "--kubeconfig", k.Kubeconfig)
+		a = append(a, "--kubeconfig="+k.Kubeconfig)
 	}
 	if k.Context != "" {
-		a = append(a, "--context", k.Context)
+		a = append(a, "--context="+k.Context)
 	}
 	return append(a, args...)
 }
 
-// Run runs kubectl with the args and returns its stdout.
+// Run runs kubectl with the args and returns its stdout. Names from outside go after a "--",
+// so none of them can become an option.
 func (k Kube) Run(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, k.Bin, k.args(append([]string{"--request-timeout=10s"}, args...))...)
 	var out, errb bytes.Buffer
@@ -91,7 +92,11 @@ func (k Kube) Run(ctx context.Context, stdin []byte, args ...string) ([]byte, er
 
 // Get runs kubectl with -o json and decodes the answer into out.
 func (k Kube) Get(ctx context.Context, out any, args ...string) error {
-	b, err := k.Run(ctx, nil, append(args, "-o", "json")...)
+	i := slices.Index(args, "--")
+	if i < 0 {
+		i = len(args)
+	}
+	b, err := k.Run(ctx, nil, slices.Concat(args[:i], []string{"-o", "json"}, args[i:])...)
 	if err != nil {
 		return err
 	}
@@ -114,7 +119,7 @@ var forwarding = regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+) ->`)
 // 127.0.0.1:<port>. It goes through the kubelet, so a NetworkPolicy in front of the pod does
 // not get in the way.
 func (k Kube) PortForward(ctx context.Context, ns, pod string, port int) (string, error) {
-	cmd := exec.CommandContext(ctx, k.Bin, k.args([]string{"-n", ns, "port-forward", "--address", "127.0.0.1", "pod/" + pod, fmt.Sprintf(":%d", port)})...)
+	cmd := exec.CommandContext(ctx, k.Bin, k.args([]string{"--namespace=" + ns, "port-forward", "--address=127.0.0.1", "--", "pod/" + pod, fmt.Sprintf(":%d", port)})...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -146,6 +151,24 @@ func (k Kube) PortForward(ctx context.Context, ns, pod string, port int) (string
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+
+var label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// ValidLabel: a DNS-1123 label, what a namespace or a container may be called.
+func ValidLabel(s string) bool { return len(s) <= 63 && label.MatchString(s) }
+
+// ValidName: a DNS-1123 subdomain, what a Deployment, a CronJob or a ConfigMap may be called.
+func ValidName(s string) bool {
+	if len(s) > 253 {
+		return false
+	}
+	for _, p := range strings.Split(s, ".") {
+		if !ValidLabel(p) {
+			return false
+		}
+	}
+	return true
 }
 
 // --- the parts of the objects switchyard reads ---

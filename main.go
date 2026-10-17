@@ -24,8 +24,10 @@ var logo []byte
 func usage() {
 	fmt.Fprintf(os.Stderr, `switchyard %s: canary deploys and rollbacks of image tags
 
-  switchyard setup [-listen addr]   the installer, on http://127.0.0.1:8080 by default
-  switchyard serve [-listen addr]   the pages (the installer too, while there is no config)
+  switchyard setup [-listen addr] [-kubeconfig file]
+                                    the installer, on http://127.0.0.1:8080 by default, with
+                                    the cluster's admin kubeconfig (default ~/.kube/config)
+  switchyard serve [-listen addr]   the pages
   switchyard version
 
 The config is %s.
@@ -39,6 +41,10 @@ func main() {
 	}
 	fs := flag.NewFlagSet(os.Args[1], flag.ExitOnError)
 	listen := fs.String("listen", "", "address to listen on, e.g. 127.0.0.1:8083 (default: the config's, or 127.0.0.1:8080)")
+	var kubeconfig *string
+	if os.Args[1] == "setup" {
+		kubeconfig = fs.String("kubeconfig", "", "the cluster's admin kubeconfig (default: $KUBECONFIG or ~/.kube/config)")
+	}
 	switch os.Args[1] {
 	case "version":
 		fmt.Println(version)
@@ -47,10 +53,10 @@ func main() {
 		if _, err := os.Stat(config.Path()); err == nil {
 			log.Fatalf("switchyard is set up already: %s. Remove it to start over.", config.Path())
 		}
-		log.Fatal(web.Serve(version, logo, *listen))
+		log.Fatal(web.Serve(version, logo, web.Options{Listen: *listen, Kubeconfig: *kubeconfig, Setup: true}))
 	case "serve":
 		fs.Parse(os.Args[2:])
-		log.Fatal(web.Serve(version, logo, *listen))
+		log.Fatal(web.Serve(version, logo, web.Options{Listen: *listen}))
 	default:
 		usage()
 		os.Exit(2)

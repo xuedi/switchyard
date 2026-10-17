@@ -153,7 +153,7 @@ func (r *Runner) ReadState(ctx context.Context) (State, error) {
 		Data map[string]string `json:"data"`
 	}
 	st := State{Runs: map[string]Run{}}
-	err := r.k.Get(ctx, &cm, "-n", b.Namespace, "get", "configmap", b.State())
+	err := r.k.Get(ctx, &cm, "--namespace="+b.Namespace, "get", "--", "configmap", b.State())
 	if kube.IsNotFound(err) {
 		return st, nil
 	}
@@ -215,7 +215,7 @@ func (r *Runner) Recover(ctx context.Context) {
 		}
 		b := r.Box()
 		log.Printf("%s: the %s to %s was cut off by a restart, marking it failed", b.ID(), kind, run.To)
-		r.k.Run(ctx, nil, "-n", b.Namespace, "delete", "deployment", b.Deployment+"-canary", "--ignore-not-found")
+		r.k.Run(ctx, nil, "--namespace="+b.Namespace, "delete", "--ignore-not-found", "--", "deployment", b.Deployment+"-canary")
 		r.update(ctx, func(st *State) {
 			run.Status, run.Finished = "failed", now()
 			run.Message = "switchyard stopped during step " + run.Step + "; the canary copy was removed, check the Deployment"
@@ -283,7 +283,7 @@ func (r *Runner) registry(ctx context.Context, image string) (*registry.Client, 
 		var s struct {
 			Data map[string][]byte `json:"data"`
 		}
-		if err := r.k.Get(ctx, &s, "-n", b.Namespace, "get", "secret", n); err != nil {
+		if err := r.k.Get(ctx, &s, "--namespace="+b.Namespace, "get", "--", "secret", n); err != nil {
 			continue
 		}
 		if u, p, ok := registry.Creds(s.Data[".dockerconfigjson"], ref.Registry); ok {
@@ -301,7 +301,7 @@ func (r *Runner) registry(ctx context.Context, image string) (*registry.Client, 
 // PullSecrets names the Deployment's image pull secrets and those of its service account.
 func PullSecrets(ctx context.Context, k kube.Kube, ns, deployment string) ([]string, error) {
 	var d kube.Deployment
-	if err := k.Get(ctx, &d, "-n", ns, "get", "deployment", deployment); err != nil {
+	if err := k.Get(ctx, &d, "--namespace="+ns, "get", "--", "deployment", deployment); err != nil {
 		return nil, err
 	}
 	var names []string
@@ -315,7 +315,7 @@ func PullSecrets(ctx context.Context, k kube.Kube, ns, deployment string) ([]str
 	var acc struct {
 		ImagePullSecrets []struct{ Name string } `json:"imagePullSecrets"`
 	}
-	if err := k.Get(ctx, &acc, "-n", ns, "get", "serviceaccount", sa); err == nil {
+	if err := k.Get(ctx, &acc, "--namespace="+ns, "get", "--", "serviceaccount", sa); err == nil {
 		for _, s := range acc.ImagePullSecrets {
 			if !slices.Contains(names, s.Name) {
 				names = append(names, s.Name)

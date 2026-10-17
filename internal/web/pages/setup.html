@@ -15,7 +15,7 @@
     <h2>1. kubectl and the cluster</h2>
     <div id="checks" class="muted">Checking...</div>
     <label for="kubeconfig">Kubeconfig</label>
-    <input id="kubeconfig">
+    <input id="kubeconfig" readonly>
     <label for="context">Admin context</label>
     <select id="context"></select>
     <p class="muted">Used now to create switchyard's own service account (namespace <code>switchyard</code>), and later only when a box is added in a new namespace. Everything else runs on a token that may touch nothing but the boxes.</p>
@@ -51,26 +51,25 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&
 let tested = false;
 
 async function check() {
-  const q = $("kubeconfig").value ? "?kubeconfig=" + encodeURIComponent($("kubeconfig").value) : "";
-  const r = await fetch("setup/check" + q);
+  const r = await fetch("setup/check");
   const c = await r.json();
   const lines = [];
   lines.push(c.Kubectl ? `<span class="ok">kubectl</span> ${esc(c.KubectlVersion)} <code>${esc(c.Kubectl)}</code>` : `<span class="failed">${esc(c.KubectlError)}</span>`);
   if (c.Kubectl) lines.push(c.KubeconfigError ? `<span class="failed">${esc(c.KubeconfigError)}</span>` : `<span class="ok">kubeconfig</span> ${c.Contexts.length} contexts`);
   $("checks").innerHTML = lines.join("<br>");
   $("kubeconfig").value = c.Kubeconfig || "";
+  if (c.Listen) $("listen").value = c.Listen;
   $("context").innerHTML = (c.Contexts || []).map(x => `<option${x === c.Current ? " selected" : ""}>${esc(x)}</option>`).join("");
   tested = false; update();
 }
 
 function form() {
-  return {Kubeconfig: $("kubeconfig").value, Context: $("context").value, User: $("user").value,
+  return {Context: $("context").value, User: $("user").value,
           Password: $("password").value, Listen: $("listen").value};
 }
 
 function update() { $("go").disabled = !tested || !$("user").value || $("password").value.length < 8; }
 
-$("kubeconfig").addEventListener("change", check);
 $("context").addEventListener("change", () => { tested = false; $("testmsg").textContent = ""; update(); });
 $("user").addEventListener("input", update);
 $("password").addEventListener("input", update);

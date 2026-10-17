@@ -24,22 +24,35 @@ import (
 var pages embed.FS
 
 type Server struct {
-	version string
-	logo    []byte
-	store   *config.Store
+	version    string
+	logo       []byte
+	store      *config.Store
+	listen     string
+	kubeconfig string // the installer's admin kubeconfig
 
 	mu     sync.Mutex
 	engine *deploy.Engine
 	snaps  map[string]*snapshot
 }
 
+// Options: how switchyard was started.
+type Options struct {
+	Listen     string
+	Kubeconfig string // the installer's admin kubeconfig, "" for the default
+	Setup      bool   // switchyard setup: the installer is open
+}
+
 // Serve runs switchyard: the installer until there is a config, the boxes afterwards.
-func Serve(version string, logo []byte, listen string) error {
+func Serve(version string, logo []byte, o Options) error {
 	store, err := config.Load()
 	if err != nil {
 		return err
 	}
-	s := &Server{version: version, logo: logo, store: store, snaps: map[string]*snapshot{}}
+	listen := o.Listen
+	s := &Server{version: version, logo: logo, store: store, snaps: map[string]*snapshot{}, kubeconfig: o.Kubeconfig}
+	if s.kubeconfig == "" {
+		s.kubeconfig = defaultKubeconfig()
+	}
 	cfg := store.Get()
 	if cfg != nil {
 		s.start(cfg)
@@ -52,6 +65,7 @@ func Serve(version string, logo []byte, listen string) error {
 	if listen == "" {
 		listen = "127.0.0.1:8080"
 	}
+	s.listen = listen
 	log.Printf("switchyard %s listening on %s", version, listen)
 	return http.ListenAndServe(listen, s.routes())
 }

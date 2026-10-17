@@ -165,6 +165,9 @@ func ParseLinks(s string) ([]Link, error) {
 		if !ok || label == "" || url == "" {
 			return nil, errors.New("link " + f + " is not label=url")
 		}
+		if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") {
+			return nil, errors.New("link " + f + ": the url starts with https:// or http://")
+		}
 		links = append(links, Link{label, url})
 	}
 	return links, nil

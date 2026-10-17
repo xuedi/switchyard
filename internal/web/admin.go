@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -73,8 +75,13 @@ func (s *Server) adminDeployments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer cancel()
+	ns := r.URL.Query().Get("ns")
+	if err := checkName("namespace", ns, true); err != nil {
+		fail(w, err)
+		return
+	}
 	var list struct{ Items []kube.Deployment }
-	if err := k.Get(ctx, &list, "-n", r.URL.Query().Get("ns"), "get", "deployments"); err != nil {
+	if err := k.Get(ctx, &list, "--namespace="+ns, "get", "deployments"); err != nil {
 		fail(w, err)
 		return
 	}
@@ -105,8 +112,12 @@ func (s *Server) adminDetails(w http.ResponseWriter, r *http.Request) {
 	}
 	defer cancel()
 	ns, name, cname := r.URL.Query().Get("ns"), r.URL.Query().Get("d"), r.URL.Query().Get("c")
+	if err := checkNames(ns, name, cname); err != nil {
+		fail(w, err)
+		return
+	}
 	var d kube.Deployment
-	if err := k.Get(ctx, &d, "-n", ns, "get", "deployment", name); err != nil {
+	if err := k.Get(ctx, &d, "--namespace="+ns, "get", "--", "deployment", name); err != nil {
 		fail(w, err)
 		return
 	}
@@ -124,7 +135,7 @@ func (s *Server) adminDetails(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	var cjs struct{ Items []kube.CronJob }
-	if k.Get(ctx, &cjs, "-n", ns, "get", "cronjobs") == nil {
+	if k.Get(ctx, &cjs, "--namespace="+ns, "get", "cronjobs") == nil {
 		for _, cj := range cjs.Items {
 			if same(cj.Spec.JobTemplate.Spec.Template.Spec) {
 				res.Followers = append(res.Followers, "cronjob/"+cj.Metadata.Name)
@@ -132,7 +143,7 @@ func (s *Server) adminDetails(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var deps struct{ Items []kube.Deployment }
-	if k.Get(ctx, &deps, "-n", ns, "get", "deployments") == nil {
+	if k.Get(ctx, &deps, "--namespace="+ns, "get", "deployments") == nil {
 		for _, o := range deps.Items {
 			if o.Metadata.Name != name && o.Spec.Template.Metadata.Labels["switchyard/track"] == "" && same(o.Spec.Template.Spec) {
 				res.Followers = append(res.Followers, "deployment/"+o.Metadata.Name)
@@ -144,7 +155,7 @@ func (s *Server) adminDetails(w http.ResponseWriter, r *http.Request) {
 		var sec struct {
 			Data map[string][]byte `json:"data"`
 		}
-		if k.Get(ctx, &sec, "-n", ns, "get", "secret", n) == nil {
+		if k.Get(ctx, &sec, "--namespace="+ns, "get", "--", "secret", n) == nil {
 			if _, _, ok := registry.Creds(sec.Data[".dockerconfigjson"], ref.Registry); ok {
 				res.HasCreds = true
 			}
@@ -187,6 +198,29 @@ func (s *Server) adminSave(w http.ResponseWriter, r *http.Request) {
 		fail(w, badRequest("pick a namespace and a Deployment"))
 		return
 	}
+	if err := checkNames(b.Namespace, b.Deployment, b.Container); err != nil {
+		fail(w, err)
+		return
+	}
+	for _, f := range b.Followers {
+		kind, name, _ := strings.Cut(f, "/")
+		if kind != "cronjob" && kind != "deployment" || !kube.ValidName(name) {
+			fail(w, badRequest("a follower is cronjob/<name> or deployment/<name>, not "+f))
+			return
+		}
+	}
+	if f.Original != "" {
+		if _, ok := s.store.Box(f.Original); !ok {
+			fail(w, badRequest("no such box "+f.Original))
+			return
+		}
+	}
+	if b.Site != "" {
+		if u, err := url.Parse(b.Site); err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+			fail(w, badRequest("the site is an http or https URL, not "+b.Site))
+			return
+		}
+	}
 	if _, err := config.ParseLinks(b.Links); err != nil {
 		fail(w, badRequest(err.Error()))
 		return
@@ -202,7 +236,7 @@ func (s *Server) adminSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var d kube.Deployment
-	if err := k.Get(ctx, &d, "-n", b.Namespace, "get", "deployment", b.Deployment); err != nil {
+	if err := k.Get(ctx, &d, "--namespace="+b.Namespace, "get", "--", "deployment", b.Deployment); err != nil {
 		fail(w, err)
 		return
 	}
@@ -294,14 +328,31 @@ func addPullSecret(ctx context.Context, k kube.Kube, ns, sa, reg, user, token st
 	var acc struct {
 		ImagePullSecrets []map[string]string `json:"imagePullSecrets"`
 	}
-	if err := k.Get(ctx, &acc, "-n", ns, "get", "serviceaccount", sa); err != nil {
+	if err := k.Get(ctx, &acc, "--namespace="+ns, "get", "--", "serviceaccount", sa); err != nil {
 		return err
 	}
 	if slices.ContainsFunc(acc.ImagePullSecrets, func(x map[string]string) bool { return x["name"] == pullSecret }) {
 		return nil
 	}
 	patch, _ := json.Marshal(map[string]any{"imagePullSecrets": append(acc.ImagePullSecrets, map[string]string{"name": pullSecret})})
-	_, err = k.Run(ctx, nil, "-n", ns, "patch", "serviceaccount", sa, "--type", "merge", "-p", string(patch))
+	_, err = k.Run(ctx, nil, "--namespace="+ns, "patch", "--type=merge", "-p", string(patch), "--", "serviceaccount", sa)
+	return err
+}
+
+// checkName refuses a name Kubernetes would not allow, before it reaches kubectl.
+func checkName(what, s string, label bool) error {
+	if label && !kube.ValidLabel(s) || !label && !kube.ValidName(s) {
+		return badRequest(fmt.Sprintf("%q is not a valid %s name", s, what))
+	}
+	return nil
+}
+
+// checkNames: a namespace, a Deployment and a container ("" for the first one).
+func checkNames(ns, deployment, container string) error {
+	err := errors.Join(checkName("namespace", ns, true), checkName("Deployment", deployment, false))
+	if container != "" {
+		err = errors.Join(err, checkName("container", container, true))
+	}
 	return err
 }
 
@@ -320,7 +371,7 @@ func (s *Server) writeRole(ctx context.Context, k kube.Kube, ns string) error {
 		}
 		secrets = append(secrets, names...)
 		var d kube.Deployment
-		if k.Get(ctx, &d, "-n", ns, "get", "deployment", b.Deployment) == nil {
+		if k.Get(ctx, &d, "--namespace="+ns, "get", "--", "deployment", b.Deployment) == nil {
 			sa := d.Spec.Template.Spec.ServiceAccountName
 			if sa == "" {
 				sa = "default"
@@ -329,7 +380,7 @@ func (s *Server) writeRole(ctx context.Context, k kube.Kube, ns string) error {
 		}
 	}
 	if len(states) == 0 {
-		_, err := k.Run(ctx, nil, "-n", ns, "delete", "rolebinding,role", accountName, "--ignore-not-found")
+		_, err := k.Run(ctx, nil, "--namespace="+ns, "delete", "--ignore-not-found", "--", "rolebinding,role", accountName)
 		return err
 	}
 	slices.Sort(secrets)

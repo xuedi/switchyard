@@ -89,7 +89,7 @@ func (s *Server) view(id string) any {
 	var list struct {
 		Items []json.RawMessage `json:"items"`
 	}
-	err := s.eng().K.Get(ctx, &list, "-n", b.Namespace, "get", "deployment/"+b.Deployment, "deployment/"+b.Deployment+"-canary", "configmap/"+b.State(), "--ignore-not-found")
+	err := s.eng().K.Get(ctx, &list, "--namespace="+b.Namespace, "get", "--ignore-not-found", "--", "deployment/"+b.Deployment, "deployment/"+b.Deployment+"-canary", "configmap/"+b.State())
 	if kube.IsOffline(err) {
 		return v
 	}
