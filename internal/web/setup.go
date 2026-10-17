@@ -179,7 +179,7 @@ func (s *Server) setupRun(w http.ResponseWriter, r *http.Request) {
 	}
 	cfg := s.store.Get()
 	s.start(cfg)
-	auth.SetSession(w, cfg.Secret, cfg.User)
+	s.newSession(w, r, cfg)
 	writeJSON(w, map[string]any{"Unit": unit, "Systemd": os.Getenv("INVOCATION_ID") != "", "Listen": f.Listen,
 		"Commands": []string{"systemctl --user daemon-reload", "systemctl --user enable --now switchyard", "loginctl enable-linger " + os.Getenv("USER")}})
 }

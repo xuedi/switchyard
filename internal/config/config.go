@@ -17,6 +17,9 @@ type Config struct {
 	Hash   string `json:"hash"`   // the admin password, PBKDF2
 	Secret string `json:"secret"` // signs the session cookie
 
+	Generation     int      `json:"generation,omitempty"`     // in every session: one more ends them all
+	TrustedProxies []string `json:"trustedProxies,omitempty"` // whose X-Forwarded-* count, "" is the loopback
+
 	Kubectl         string `json:"kubectl"`
 	AdminKubeconfig string `json:"adminKubeconfig,omitempty"` // "" is kubectl's default
 	AdminContext    string `json:"adminContext"`              // used only to add a box in a new namespace

@@ -29,6 +29,7 @@ type Server struct {
 	store      *config.Store
 	listen     string
 	kubeconfig string // the installer's admin kubeconfig
+	trusted    proxies
 
 	mu     sync.Mutex
 	engine *deploy.Engine
@@ -55,11 +56,15 @@ func Serve(version string, logo []byte, o Options) error {
 	}
 	cfg := store.Get()
 	if cfg != nil {
+		if s.trusted, err = parseProxies(cfg.TrustedProxies); err != nil {
+			return err
+		}
 		s.start(cfg)
 		if listen == "" {
 			listen = cfg.Listen
 		}
 	} else {
+		s.trusted, _ = parseProxies(nil)
 		log.Printf("no %s yet: open the page to set switchyard up", config.Path())
 	}
 	if listen == "" {
@@ -143,40 +148,43 @@ func (s *Server) routes() http.Handler {
 	}
 	private := func(pattern string, h http.HandlerFunc) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-			cfg := s.store.Get()
-			if cfg == nil || !auth.Valid(r, cfg.Secret, cfg.User) {
+			if !s.session(w, r) {
 				http.Error(w, "log in first", http.StatusUnauthorized)
 				return
 			}
 			h(w, r)
 		})
 	}
+	privatePage := func(pattern, name string) {
+		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			if !s.session(w, r) {
+				http.Redirect(w, r, "./", http.StatusSeeOther)
+				return
+			}
+			page(name)(w, r)
+		})
+	}
 
 	open("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		cfg := s.store.Get()
 		switch {
-		case cfg == nil:
+		case s.store.Get() == nil:
 			page("setup.html")(w, r)
-		case !auth.Valid(r, cfg.Secret, cfg.User):
+		case !s.session(w, r):
 			http.Redirect(w, r, "login", http.StatusSeeOther)
 		default:
 			page("boxes.html")(w, r)
 		}
 	})
-	open("GET /box", func(w http.ResponseWriter, r *http.Request) {
-		cfg := s.store.Get()
-		if cfg == nil || !auth.Valid(r, cfg.Secret, cfg.User) {
-			http.Redirect(w, r, "./", http.StatusSeeOther)
-			return
-		}
-		page("box.html")(w, r)
-	})
+	privatePage("GET /box", "box.html")
+	privatePage("GET /password", "password.html")
 	open("GET /login", page("login.html"))
 	open("POST /login", s.login)
 	open("POST /logout", func(w http.ResponseWriter, r *http.Request) {
-		auth.ClearSession(w)
+		auth.ClearSession(w, s.trusted.https(r))
 		http.Redirect(w, r, "login", http.StatusSeeOther)
 	})
+	private("POST /logout/all", s.logoutAll)
+	private("POST /password", s.password)
 	open("GET /style.css", page("style.css"))
 	open("GET /logo.svg", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
@@ -218,8 +226,68 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "login?failed=1", http.StatusSeeOther)
 		return
 	}
-	auth.SetSession(w, cfg.Secret, cfg.User)
+	s.newSession(w, r, cfg)
 	http.Redirect(w, r, "./", http.StatusSeeOther)
+}
+
+func (s *Server) newSession(w http.ResponseWriter, r *http.Request, cfg *config.Config) {
+	now := time.Now()
+	auth.SetSession(w, cfg.Secret, auth.Session{User: cfg.User, Generation: cfg.Generation, Start: now, Seen: now}, s.trusted.https(r))
+}
+
+// session: the request has a live session; it is renewed when its last request is a while ago,
+// so it ends after auth.Idle without one.
+func (s *Server) session(w http.ResponseWriter, r *http.Request) bool {
+	cfg := s.store.Get()
+	if cfg == nil {
+		return false
+	}
+	ses, ok := auth.ReadSession(r, cfg.Secret)
+	now := time.Now()
+	if !ok || !ses.Live(cfg.User, cfg.Generation, now) {
+		return false
+	}
+	if now.Sub(ses.Seen) > 5*time.Minute {
+		ses.Seen = now
+		auth.SetSession(w, cfg.Secret, ses, s.trusted.https(r))
+	}
+	return true
+}
+
+// logoutAll ends every session, this one too.
+func (s *Server) logoutAll(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.Update(func(c *config.Config) error { c.Generation++; return nil }); err != nil {
+		fail(w, err)
+		return
+	}
+	auth.ClearSession(w, s.trusted.https(r))
+	http.Redirect(w, r, "login", http.StatusSeeOther)
+}
+
+// password changes the password and ends every other session.
+func (s *Server) password(w http.ResponseWriter, r *http.Request) {
+	cfg := s.store.Get()
+	if !auth.Check(cfg.Hash, r.FormValue("old")) {
+		time.Sleep(time.Second)
+		http.Redirect(w, r, "password?failed=old", http.StatusSeeOther)
+		return
+	}
+	pw := r.FormValue("new")
+	if len(pw) < 8 || pw != r.FormValue("again") {
+		http.Redirect(w, r, "password?failed=new", http.StatusSeeOther)
+		return
+	}
+	hash, err := auth.Hash(pw)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if err := s.store.Update(func(c *config.Config) error { c.Hash = hash; c.Generation++; return nil }); err != nil {
+		fail(w, err)
+		return
+	}
+	s.newSession(w, r, s.store.Get())
+	http.Redirect(w, r, "password?changed=1", http.StatusSeeOther)
 }
 
 // click starts a run (or aborts one): 204, or the reason as text.

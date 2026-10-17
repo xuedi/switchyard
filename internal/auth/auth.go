@@ -19,7 +19,8 @@ import (
 const (
 	iterations = 600000
 	cookieName = "switchyard"
-	lifetime   = 30 * 24 * time.Hour
+	Idle       = 12 * time.Hour     // a session ends this long after its last request
+	Absolute   = 7 * 24 * time.Hour // and this long after the login at the latest
 )
 
 func Hash(password string) (string, error) {
@@ -47,6 +48,12 @@ func Check(hash, password string) bool {
 	return err == nil && subtle.ConstantTimeCompare(key, want) == 1
 }
 
+// Same compares two strings in constant time, whatever their lengths.
+func Same(a, b string) bool {
+	x, y := sha256.Sum256([]byte(a)), sha256.Sum256([]byte(b))
+	return subtle.ConstantTimeCompare(x[:], y[:]) == 1
+}
+
 func NewSecret() string {
 	b := make([]byte, 32)
 	rand.Read(b)
@@ -59,34 +66,58 @@ func sign(secret, msg string) string {
 	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
 }
 
-// SetSession logs the user in. No Path: the browser takes the page's directory, so the cookie
+// Session is what the cookie carries, signed. Generation is the config's: bumping it there ends
+// every session at once.
+type Session struct {
+	User       string
+	Generation int
+	Start      time.Time // the login
+	Seen       time.Time // the last request, kept to the minute or so
+}
+
+// Live: the session is the user's, of the current generation, and has not run out.
+func (s Session) Live(user string, generation int, now time.Time) bool {
+	return Same(s.User, user) && s.Generation == generation &&
+		now.Before(s.Start.Add(Absolute)) && now.Before(s.Seen.Add(Idle))
+}
+
+// SetSession writes the cookie. No Path: the browser takes the page's directory, so the cookie
 // stays inside a reverse proxy's prefix.
-func SetSession(w http.ResponseWriter, secret, user string) {
-	msg := base64.RawURLEncoding.EncodeToString([]byte(user)) + "." + strconv.FormatInt(time.Now().Add(lifetime).Unix(), 10)
+func SetSession(w http.ResponseWriter, secret string, s Session, secure bool) {
+	msg := strings.Join([]string{base64.RawURLEncoding.EncodeToString([]byte(s.User)), strconv.Itoa(s.Generation),
+		strconv.FormatInt(s.Start.Unix(), 10), strconv.FormatInt(s.Seen.Unix(), 10)}, ".")
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: msg + "." + sign(secret, msg),
-		MaxAge: int(lifetime.Seconds()), HttpOnly: true, SameSite: http.SameSiteLaxMode})
+		MaxAge: int(time.Until(s.Start.Add(Absolute)).Seconds()), HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
 }
 
-func ClearSession(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteLaxMode})
+func ClearSession(w http.ResponseWriter, secure bool) {
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", MaxAge: -1, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
 }
 
-// Valid: the request carries an unexpired session of this user.
-func Valid(r *http.Request, secret, user string) bool {
+// ReadSession returns the request's session if its signature holds; Live says if it still counts.
+func ReadSession(r *http.Request, secret string) (Session, bool) {
 	c, err := r.Cookie(cookieName)
 	if err != nil {
-		return false
+		return Session{}, false
 	}
 	i := strings.LastIndexByte(c.Value, '.')
 	if i < 0 {
-		return false
+		return Session{}, false
 	}
 	msg, sig := c.Value[:i], c.Value[i+1:]
 	if !hmac.Equal([]byte(sig), []byte(sign(secret, msg))) {
-		return false
+		return Session{}, false
 	}
-	u, exp, ok := strings.Cut(msg, ".")
-	name, err := base64.RawURLEncoding.DecodeString(u)
-	t, err2 := strconv.ParseInt(exp, 10, 64)
-	return ok && err == nil && err2 == nil && string(name) == user && time.Now().Unix() < t
+	f := strings.Split(msg, ".")
+	if len(f) != 4 {
+		return Session{}, false
+	}
+	user, err1 := base64.RawURLEncoding.DecodeString(f[0])
+	gen, err2 := strconv.Atoi(f[1])
+	start, err3 := strconv.ParseInt(f[2], 10, 64)
+	seen, err4 := strconv.ParseInt(f[3], 10, 64)
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
+		return Session{}, false
+	}
+	return Session{User: string(user), Generation: gen, Start: time.Unix(start, 0), Seen: time.Unix(seen, 0)}, true
 }
