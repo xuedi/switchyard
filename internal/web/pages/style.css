@@ -52,6 +52,8 @@ pre { margin: 0; padding: 10px; background: var(--log); border-radius: 6px; max-
 .blocked p { margin: 0 0 8px; }
 .blocked ul { margin: 0 0 12px; padding-left: 18px; }
 .blocked li { word-break: break-word; margin-bottom: 4px; }
+.danger { border: 2px solid var(--stop); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+.danger strong { color: var(--stop); }
 .offline { text-align: center; padding: 48px 16px; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--off); margin-right: 6px; }
 .dot.on { background: var(--ok); }

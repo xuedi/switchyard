@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.8.0-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.9.0-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -68,8 +68,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.8.0/switchyard-0.8.0-linux-amd64
-install -m 0755 switchyard-0.8.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.9.0/switchyard-0.9.0-linux-amd64
+install -m 0755 switchyard-0.9.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -204,7 +204,7 @@ timestamp per run, in the set's time zone; a run without a manifest is incomplet
 - **Retention:** every run of the 5 newest dates, then the earliest complete run of each month
   for 12 months; a run goes as a whole. switchyard writes `.switchyard` into its target: a
   pruner of the host's should skip such a directory.
-- **Restore** a run, all of it or single items: type the namespace and your password. First a
+- **Restore** a run, all of it or single items: tick the warning that says what will happen. First a
   safety backup of the set (marked pre-restore; it can be skipped when the data is too broken
   for one), then the namespace's workloads go to 0 and its CronJobs are suspended, each database
   is dropped, created and imported as the restore user (root), each volume emptied (top-level

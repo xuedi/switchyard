@@ -110,8 +110,7 @@ function openRestore(run) {
   const a = (last.Archives || []).find(x => x.Run === run);
   restoring = a;
   $("rtitle").textContent = "Restore " + run;
-  $("rns").textContent = ns;
-  $("rconfirm").value = ""; $("rpw").value = ""; $("rnosafety").checked = false;
+  $("rconfirm").checked = false; $("rnosafety").checked = false;
   $("rimport").checked = a.Items.length === 0;
   renderPicks();
   $("restore").hidden = false;
@@ -123,6 +122,7 @@ function renderPicks() {
   if (!$("rimport").checked) {
     $("rpicks").innerHTML = a.Items.map(n => `<label class="check"><input type="checkbox" data-pick="${esc(n)}" checked>${esc(n)}</label>`).join("")
       || `<p class="muted">This run has none of the set's items under their names: an import.</p>`;
+    renderWarn();
     return;
   }
   const files = a.Files.filter(f => !f.Name.endsWith("_manifest.json"));
@@ -131,15 +131,37 @@ function renderPicks() {
       ${files.map(f => `<option>${esc(f.Name)}</option>`).join("")}</select></div>
     <div>${it.kind === "volume" ? `<label>directory in the tar (empty: all of it)</label><input data-path="${esc(it.name)}" placeholder="e.g. app/data/images">` : ""}</div>
   </div>`).join("");
+  renderWarn();
+}
+
+function picked() {
+  return $("rimport").checked
+    ? [...document.querySelectorAll("[data-imp]")].filter(s => s.value).map(s => s.dataset.imp)
+    : [...document.querySelectorAll("[data-pick]:checked")].map(x => x.dataset.pick);
+}
+
+function renderWarn() {
+  const items = picked(), list = items.map(n => `<code>${esc(n)}</code>`).join(", ");
+  $("rwarn").innerHTML = !items.length ? `Pick at least one item to restore.`
+    : `<strong>I restore ${esc(ns)} from ${esc(restoring.Run)}:</strong> the app is scaled to 0 and its CronJobs suspended, ${list} ${items.length > 1 ? "are" : "is"} replaced by the archive's, then everything comes back. `
+      + ($("rnosafety").checked ? `<strong>No safety backup: what is in ${list} now is lost for good.</strong>`
+        : `First a safety backup of the whole set, marked pre-restore.`);
+  $("rconfirm").disabled = !items.length;
+  if (!items.length) $("rconfirm").checked = false;
+  $("rgo").disabled = !$("rconfirm").checked;
 }
 $("rimport").addEventListener("change", renderPicks);
+$("rnosafety").addEventListener("change", () => { $("rconfirm").checked = false; renderWarn(); });
+$("rconfirm").addEventListener("change", renderWarn);
+$("rpicks").addEventListener("change", renderWarn);
 $("rcancel").addEventListener("click", () => { $("restore").hidden = true; restoring = null; });
 $("archives").addEventListener("click", e => {
   const b = e.target.closest("[data-restore]");
   if (b && !b.disabled) openRestore(b.dataset.restore);
 });
 $("rgo").addEventListener("click", async () => {
-  const body = {Run: restoring.Run, Confirm: $("rconfirm").value.trim(), Password: $("rpw").value, NoSafety: $("rnosafety").checked};
+  if (!$("rconfirm").checked) return;
+  const body = {Run: restoring.Run, Confirm: ns, NoSafety: $("rnosafety").checked};
   if ($("rimport").checked) {
     body.Import = [...document.querySelectorAll("[data-imp]")].filter(s => s.value).map(s => {
       const p = document.querySelector(`[data-path="${CSS.escape(s.dataset.imp)}"]`);
@@ -149,9 +171,8 @@ $("rgo").addEventListener("click", async () => {
     body.Items = [...document.querySelectorAll("[data-pick]:checked")].map(x => x.dataset.pick);
   }
   $("rgo").disabled = true;
-  if (await post("backup/restore" + q, body)) { $("restore").hidden = true; restoring = null; }
-  $("rpw").value = "";
-  $("rgo").disabled = false;
+  if (await post("backup/restore" + q, body)) { $("restore").hidden = true; restoring = null; return; }
+  renderWarn();
 });
 
 // --- the set ---

@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/xuedi/switchyard/internal/auth"
 	"github.com/xuedi/switchyard/internal/backup"
 	"github.com/xuedi/switchyard/internal/config"
 	"github.com/xuedi/switchyard/internal/kube"
@@ -189,8 +188,7 @@ type restoreForm struct {
 	Items    []string      // a run of the set: the items to put back
 	Import   []backup.Pick // or archives of another run, picked per item
 	NoSafety bool
-	Confirm  string // the namespace, typed
-	Password string
+	Confirm  string // the namespace the page showed
 }
 
 func (s *Server) backupRestore(w http.ResponseWriter, r *http.Request) {
@@ -217,15 +215,7 @@ func (s *Server) backupRestore(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) restore(r *http.Request, set config.Backup, f restoreForm) error {
 	if f.Confirm != set.Namespace {
-		return badRequest("type the namespace's name to confirm")
-	}
-	cfg := s.store.Get()
-	ok, locked := s.limiter.Try(s.trusted.client(r), func() bool { return auth.Check(cfg.Hash, f.Password) })
-	switch {
-	case locked:
-		return badRequest("too many failed tries from here: try again in 15 minutes")
-	case !ok:
-		return badRequest("wrong password")
+		return badRequest("the page shows another namespace: reload it")
 	}
 	if !runPrefix.MatchString(f.Run + "_x") {
 		return badRequest("no such run")
