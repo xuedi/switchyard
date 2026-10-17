@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.6.0-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.7.0-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -66,12 +66,15 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.6.0/switchyard-0.6.0-linux-amd64
-install -m 0755 switchyard-0.6.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
-switchyard setup                                                        # http://127.0.0.1:8080
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.7.0/switchyard-0.7.0-linux-amd64
+install -m 0755 switchyard-0.7.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+switchyard setup                                                        # 127.0.0.1:8083
 ```
 
-The installer checks `kubectl` and the kubeconfig, tests the admin context, asks for a user, a
+`switchyard setup` prints the installer's URL with a one-time token; without it the installer
+answers nothing, so nobody who reaches the port first can set switchyard up. The admin
+kubeconfig is `$KUBECONFIG` or `~/.kube/config`, or the file given with `-kubeconfig`. The
+installer checks `kubectl` and the kubeconfig, tests the admin context, asks for a user, a
 password and the address to listen on, and then:
 
 - creates the namespace `switchyard` with a service account and its token,
@@ -86,9 +89,25 @@ systemctl --user enable --now switchyard
 loginctl enable-linger $USER   # keep it running without a login
 ```
 
+## Behind a reverse proxy
+
 switchyard speaks plain HTTP: keep it on 127.0.0.1 behind a reverse proxy with HTTPS. Every
-link is relative, so any path prefix works. A login with a signed session cookie guards every
-page; clicks are protected against cross-site requests.
+link is relative, so any path prefix works. A request from a trusted proxy (`trustedProxies` in
+`config.json`, addresses or CIDR ranges, the loopback when empty) has its `X-Forwarded-Proto`
+and `X-Forwarded-For` believed: the session cookie is `Secure` when the browser is on HTTPS,
+and the client is the rightmost address that is not a trusted proxy. Nobody else's forwarding
+headers count.
+
+- **The login:** a signed session cookie that ends 12 hours after the last request, a week
+  after the login at the latest. Ten failed logins from one client in 15 minutes lock it out
+  for 15 minutes, and one password check runs at a time.
+- **Password** (in the header) changes the password and logs out every other session; **Log out
+  everywhere** there ends them all.
+- Clicks are protected against cross-site requests; the pages run only their own scripts and
+  are framed only by their own origin.
+- Every action leaves one `audit` line in the journal (`journalctl --user -u switchyard`): the
+  user, the client, the action, the box, the tag, the result. A run's log starts with who
+  started it from where.
 
 ## Adding a box
 
@@ -157,12 +176,13 @@ when it would cross one.
 
 ```bash
 just check     # gofmt, vet, the builds for amd64, arm64 and armv7
-just run       # the installer or the boxes on 127.0.0.1:8080
+just setup     # the installer on 127.0.0.1:8083, it prints its URL
+just run       # the boxes on 127.0.0.1:8083
 just release   # the release binaries in dist/
 ```
 
-Standard library only. `XDG_CONFIG_HOME=/tmp/sy just run` keeps a test setup apart from your
-own.
+Standard library only. `XDG_CONFIG_HOME=/tmp/sy just setup` keeps a test setup apart from
+your own.
 
 ## License
 
