@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	StateName = "switchyard-backup" // the ConfigMap, and the CronJob
+	StateName = "switchyard-backup" // the ConfigMap, and the CronJob (other backups may key on it)
 	kindLabel = "switchyard/backup" // on every Job of a set: manual, scheduled, pre-restore, restore, index
 	keepRuns  = 15
 	logLines  = 300
