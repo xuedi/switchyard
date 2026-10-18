@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.11.0-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.12.0-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -40,8 +40,8 @@ registry gets a **Canary** and a **Deploy** button, every tag that went live a *
   pending-SQL command in the new image and stops on drops, renames and `NOT NULL` without a
   default, with a **Deploy anyway** for the planned last step. Then the migrate command, then
   the traffic.
-- **Backups and restores.** A namespace's databases and volumes as plain dated archives on a
-  PVC, on a schedule or by hand; a restore takes a safety backup first. See [Backups](#backups).
+- **Backups and restores.** A namespace's databases, volumes and S3 buckets as plain dated
+  archives on a PVC, on a schedule or by hand; a restore takes a safety backup first. See [Backups](#backups).
 - **Least privilege.** The setup creates a service account whose Role covers only what the
   boxes need, namespace by namespace; the admin context is used only to add a box. Cluster-wide
   it may read the workloads and change replica counts, nothing else (see [Running](#running)).
@@ -73,8 +73,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.11.0/switchyard-0.11.0-linux-amd64
-install -m 0755 switchyard-0.11.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.12.0/switchyard-0.12.0-linux-amd64
+install -m 0755 switchyard-0.12.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -183,14 +183,16 @@ when it would cross one.
 
 ## Backups
 
-switchyard also backs up and restores an app: a namespace's databases and volumes, as plain
-dated archives on a PVC. **Back up a namespace** on the start page; the form suggests the
+switchyard also backs up and restores an app: a namespace's databases, volumes and S3 buckets,
+as plain dated archives on a PVC. **Back up a namespace** on the start page; the form suggests the
 MariaDB and PostgreSQL StatefulSets (with their user, database and Secret keys read from the
-official images' variables) and the other PVCs.
+official images' variables), S3 stores it knows by their image (Garage, MinIO, SeaweedFS), and
+the other PVCs.
 
 ```
 <target>/2026-10-17_05-10_database.sql.zst   mariadb-dump --single-transaction | zstd
 <target>/2026-10-17_05-10_uploads.tar.zst    tar of the volume, its content at the root
+<target>/2026-10-17_05-10_images.tar.zst     tar of a bucket, the object keys as paths
 <target>/2026-10-17_05-10_manifest.json      written last: sizes, sha256, the images live
 ```
 
@@ -200,12 +202,13 @@ timestamp per run, in the set's time zone; a run without a manifest is incomplet
 - **Where they go:** a PVC in the namespace that the cluster admin binds to a directory (a
   static PV); switchyard only names it. Off-site copies are the host's job.
 - **How:** a Job per run, its steps in order: a before-hook, the dumps in each database's own
-  image (its dump tool matches the server), a `tar` per volume, an after-hook, then the manifest,
+  image (its dump tool matches the server), a `tar` per volume, a copy and a `tar` per bucket,
+  an after-hook, then the manifest,
   the retention and a listing of the target, which switchyard reads from the Job's log. A failed
   step does not skip the after-hook; the run then fails without a manifest.
 - **Schedule:** a CronJob `switchyard-backup` made from the set, so backups run without
   switchyard; always hot (`--single-transaction`, `pg_dump`). **Cold** scales the namespace's
-  workloads (not its databases) to 0 for the backups started on the page. A host backup can
+  workloads (not its databases and stores) to 0 for the backups started on the page. A host backup can
   skip namespaces by that name, so it stays as it is.
 - **A schedule that stops** shows in red on the start page and the backups page: the CronJob
   suspended (with a button to resume it), the last scheduled run failed, or a slot passed more
@@ -220,17 +223,26 @@ timestamp per run, in the set's time zone; a run without a manifest is incomplet
   safety backup of the set (marked pre-restore; it can be skipped when the data is too broken
   for one), then the namespace's workloads go to 0 and its CronJobs are suspended, each database
   is dropped, created and imported as the restore user (root), each volume emptied (top-level
-  excludes keep their content) and extracted, then the after-hook and everything back up.
+  excludes keep their content) and extracted, each bucket made equal to its archive (objects
+  it does not have are deleted), then the after-hook and everything back up.
 - **Import:** archives of another layout (from before switchyard) are restored file by file:
-  per item, which archive of the run and, for a tar, which directory in it (`app/data/images`).
+  per item, which archive of the run and, for a tar, which directory in it (`app/data/images`);
+  a volume's directory can fill a bucket that way.
 - **The tools image** runs the volume and listing steps: `sh`, `tar`, `zstd`, `sha256sum`; by
   default the first MariaDB's image, which has them.
+- **S3 buckets** of any S3-compatible store: per bucket the endpoint (`http://garage:3900`), the
+  region, path-style or virtual-host addressing, a Secret with the key pair (its two key names),
+  and the store's StatefulSet when it runs in the namespace (it stays up, like a database). The
+  **S3 image** (`sh`, `rclone`, by default `rclone/rclone`) copies a bucket into the Job's
+  `emptyDir`, the tools image tars it, so the node needs room for one bucket at a time. Objects
+  only: their metadata, versions and the bucket's settings are not in the archive; a restore
+  sets the content type from the extension.
 - A backup or restore waits for a canary or deploy in the namespace, and the other way round.
 - A namespace stopped on **Running** has its schedule suspended with it: the backups say so in
   grey, not as a warning, and Start resumes it. The CronJob stays, so a host backup still skips
   the namespace; its volumes do not change while it is stopped.
 - **Assumed:** one node (the Job mounts the target and the volumes at once), and NetworkPolicies
-  that let a Job's pod reach the databases (its pods carry
+  that let a Job's pod reach the databases and stores (its pods carry
   `app.kubernetes.io/managed-by: switchyard`). The Jobs mount the namespace's PVCs and its
   Secrets by reference: with backups, switchyard's Role is close to namespace admin.
 
