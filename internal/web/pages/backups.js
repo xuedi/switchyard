@@ -139,7 +139,7 @@ function renderPicks() {
   $("rpicks").innerHTML = set.items.map(it => `<div class="grid">
     <div><label>${esc(it.name)} (${esc(it.kind)}) from</label><select data-imp="${esc(it.name)}"><option value="">- not restored -</option>
       ${files.map(f => `<option>${esc(f.Name)}</option>`).join("")}</select></div>
-    <div>${it.kind === "volume" ? `<label>directory in the tar (empty: all of it)</label><input data-path="${esc(it.name)}" placeholder="e.g. app/data/images">` : ""}</div>
+    <div>${it.kind === "volume" || it.kind === "s3" ? `<label>directory in the tar (empty: all of it)</label><input data-path="${esc(it.name)}" placeholder="e.g. app/data/images">` : ""}</div>
   </div>`).join("");
   renderWarn();
 }
@@ -194,18 +194,37 @@ const FIELDS = {
   mariadb: [["service", "Service"], ["statefulSet", "StatefulSet"], ["database", "Database"], ["user", "User"], ["secret", "Secret"],
             ["passwordKey", "its password key"], ["rootUser", "Restore user (root)"], ["rootKey", "its password key"]],
   volume: [["subPath", "Sub-path (empty: all of it)"], ["exclude", "Excludes, space separated"]],
+  s3: [["bucket", "Bucket"], ["endpoint", "Endpoint, e.g. http://garage:3900"], ["region", "Region (empty: us-east-1)"],
+       ["statefulSet", "StatefulSet of the store (empty: outside)"], ["secret", "Secret with the key pair"], ["virtualHost", "Virtual-host style (bucket.host)"],
+       ["accessKeyKey", "its access key key"], ["secretKeyKey", "its secret key key"]],
 };
 FIELDS.postgres = FIELDS.mariadb.map(([k, l]) => [k, k === "rootUser" ? "Restore user (postgres)" : l]);
 
 function itemRow(it, i) {
   const fields = FIELDS[it.kind].map(([k, label]) => {
+    if (k === "virtualHost") return `<div><label class="check"><input type="checkbox" data-i="${i}" data-f="${k}"${it[k] ? " checked" : ""}>${esc(label)}</label></div>`;
     const val = k === "exclude" ? (it.exclude || []).join(" ") : (it[k] || "");
     return `<div><label>${esc(label)}</label><input data-i="${i}" data-f="${k}" value="${esc(val)}"></div>`;
   }).join("");
-  const what = it.kind === "volume" ? `volume <code>${esc(it.pvc)}</code>` : `${esc(it.kind)} <code>${esc(it.statefulSet || it.service)}</code>`;
+  const what = it.kind === "volume" ? `volume <code>${esc(it.pvc)}</code>`
+    : it.kind === "s3" ? `S3 bucket${it.bucket ? ` <code>${esc(it.bucket)}</code>` : ""}${it.statefulSet || it.endpoint ? ` on <code>${esc(it.statefulSet || it.endpoint)}</code>` : ""}`
+    : `${esc(it.kind)} <code>${esc(it.statefulSet || it.service)}</code>`;
   return `<div class="card item"><label class="check"><input type="checkbox" data-i="${i}" data-f="on"${it.on ? " checked" : ""}>${what}</label>
     <div class="grid"><div><label>Name in the files</label><input data-i="${i}" data-f="name" value="${esc(it.name)}"></div><div></div>${fields}</div></div>`;
 }
+
+function renderItems() {
+  $("items").innerHTML = candidates.length ? candidates.map(itemRow).join("") : "No database, S3 store or PVC found.";
+}
+
+// a bucket more, on the store of the last one
+$("addbucket").addEventListener("click", () => {
+  readForm();
+  const from = candidates.filter(c => c.kind === "s3").pop() || {accessKeyKey: "access-key-id", secretKeyKey: "secret-access-key"};
+  const {name, bucket, on, ...store} = from;
+  candidates.push({...store, kind: "s3", name: "", bucket: "", on: true});
+  renderItems();
+});
 
 function workloads(sel, list, pick) {
   sel.innerHTML = `<option value="">- none -</option>` + list.map(w => `<option${w === pick ? " selected" : ""}>${esc(w)}</option>`).join("");
@@ -221,14 +240,14 @@ async function openForm() {
     $("formtitle").textContent = set.target ? "The backup set of " + ns : "Back up " + ns;
     $("remove").hidden = !(last && last.Set && last.Set.target);
     $("target").innerHTML = `<option value="">-</option>` + sg.PVCs.map(p => `<option${p === set.target ? " selected" : ""}>${esc(p)}</option>`).join("");
-    $("tools").value = set.tools || ""; $("schedule").value = set.schedule || ""; $("tz").value = set.timeZone || sg.TimeZone;
+    $("tools").value = set.tools || ""; $("s3image").value = set.s3Image || ""; $("schedule").value = set.schedule || ""; $("tz").value = set.timeZone || sg.TimeZone;
     $("cold").checked = !!set.cold; $("production").checked = !!set.production; $("daily").value = set.keepDaily || ""; $("monthly").value = set.keepMonthly || "";
     workloads($("beforew"), sg.Workloads || [], set.before && set.before.workload); $("beforec").value = set.before ? set.before.command : "";
     workloads($("afterw"), sg.Workloads || [], set.after && set.after.workload); $("afterc").value = set.after ? set.after.command : "";
-    const key = it => it.kind + ":" + (it.kind === "volume" ? it.pvc + "/" + (it.subPath || "") : it.statefulSet || it.service);
+    const key = it => it.kind + ":" + (it.kind === "volume" ? it.pvc + "/" + (it.subPath || "") : it.statefulSet || it.service || it.endpoint);
     candidates = (set.items || []).map(it => ({...it, on: true}));
     for (const it of sg.Items || []) if (!candidates.some(c => key(c) === key(it))) candidates.push({...it, on: false});
-    $("items").innerHTML = candidates.length ? candidates.map(itemRow).join("") : "No database StatefulSet and no PVC found.";
+    renderItems();
   } catch (e) { $("formerr").textContent = String(e.message || e); $("formerr").hidden = false; }
   $("form").scrollIntoView({behavior: "smooth"});
 }
@@ -236,15 +255,15 @@ async function openForm() {
 function readForm() {
   for (const el of $("items").querySelectorAll("[data-i]")) {
     const it = candidates[+el.dataset.i], f = el.dataset.f;
-    if (f === "on") it.on = el.checked;
+    if (f === "on" || f === "virtualHost") it[f] = el.checked;
     else if (f === "exclude") it.exclude = el.value.split(/\s+/).filter(Boolean);
     else it[f] = el.value.trim();
   }
   const num = id => parseInt($(id).value, 10) || 0;
   const hook = (w, c) => $(w).value ? {workload: $(w).value, command: $(c).value.trim()} : null;
   return {
-    namespace: ns, target: $("target").value, tools: $("tools").value.trim(),
-    items: candidates.filter(it => it.on).map(({on, ...it}) => it),
+    namespace: ns, target: $("target").value, tools: $("tools").value.trim(), s3Image: $("s3image").value.trim(),
+    items: candidates.filter(it => it.on).map(({on, ...it}) => it.kind === "s3" && !it.name ? {...it, name: it.bucket} : it),
     schedule: $("schedule").value.trim(), timeZone: $("tz").value.trim(), cold: $("cold").checked, production: $("production").checked,
     before: hook("beforew", "beforec"), after: hook("afterw", "afterc"),
     keepDaily: num("daily"), keepMonthly: num("monthly"),

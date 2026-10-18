@@ -270,7 +270,10 @@ func (r *Runner) cluster(ctx context.Context) (cluster, error) {
 	b := r.Set()
 	c := cluster{images: map[string]string{}, hooks: map[string]*hookSpec{}, live: map[string]string{}}
 	for _, it := range b.Items {
-		if it.Kind == "volume" {
+		if it.Kind == "s3" {
+			c.s3 = b.S3ImageOr()
+		}
+		if !it.Dump() {
 			continue
 		}
 		var sts struct {
@@ -360,7 +363,8 @@ type result struct {
 // prefixed is a line of kubectl logs --prefix: [pod/<pod>/<container>] line.
 var prefixed = regexp.MustCompile(`^\[pod/[^/]+/([^\]]+)\] ?(.*)$`)
 
-// rank orders the containers' logs as the steps ran; --all-containers does not.
+// rank orders the containers' logs as the steps ran; --all-containers does not. A bucket has
+// two steps: s3 before tar, untar before restore.
 func rank(c string, items []string) int {
 	switch {
 	case c == "start" || c == "unpack":
@@ -372,8 +376,14 @@ func rank(c string, items []string) int {
 	case c == "finish" || c == "index":
 		return 1000
 	}
-	_, name, _ := strings.Cut(c, "-")
-	return 10 + slices.Index(items, name)
+	for i, it := range items {
+		for n, p := range []string{"s3", "untar", "tar", "dump", "restore"} {
+			if c == cname(p+"-"+it) {
+				return 10 + 2*i + min(n, 2)/2
+			}
+		}
+	}
+	return 899
 }
 
 func parse(out string, items []string) result {
@@ -509,7 +519,7 @@ func (r *Runner) activeJob(ctx context.Context) (string, error) {
 // --- scaling the app down and back ---
 
 // scaleDown scales the namespace's Deployments and the StatefulSets that are not the items'
-// databases to 0, and with suspend its CronJobs; all remembered in the run.
+// databases or stores to 0, and with suspend its CronJobs; all remembered in the run.
 func (r *Runner) scaleDown(ctx context.Context, suspend bool) error {
 	b := r.Set()
 	dbs := map[string]bool{}
@@ -730,7 +740,7 @@ func (r *Runner) Restore(ts string, picks []Pick, imp, noSafety bool, by string)
 		switch {
 		case !strings.HasPrefix(f, ts+"_") || !files[f]:
 			return Refused(f + " is not in the target (Refresh lists it again)")
-		case picks[i].Path != "" && (b.Items[n].Kind != "volume" || !safePath.MatchString(picks[i].Path) || strings.Contains(picks[i].Path, "..")):
+		case picks[i].Path != "" && (b.Items[n].Dump() || !safePath.MatchString(picks[i].Path) || strings.Contains(picks[i].Path, "..")):
 			return Refused("the path " + picks[i].Path + " is a directory in the tar, e.g. app/data/images")
 		}
 	}

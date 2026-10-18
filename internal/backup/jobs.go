@@ -27,10 +27,19 @@ var DBName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 func sq(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+var notLabel = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// cname makes a step's name a container name: an item may have . and _ in its name.
+func cname(s string) string {
+	s = notLabel.ReplaceAllString(strings.ToLower(s), "-")
+	return strings.Trim(s[:min(len(s), 63)], "-")
+}
+
 // cluster is what a Job needs from the cluster, read when it is made.
 type cluster struct {
 	images map[string]string // item name -> its database's image
 	tools  string
+	s3     string // the buckets' image
 	hooks  map[string]*hookSpec
 	live   map[string]string // workload -> image, for the manifest
 }
@@ -105,7 +114,7 @@ func pod(b config.Backup, c cluster, steps []step, items []config.Item, rw bool)
 		}
 		mounts := append(append([]any{}, base...), itemMounts...)
 		containers = append(containers, map[string]any{
-			"name": s.name, "image": s.image, "command": []any{"sh", "-c", s.script},
+			"name": cname(s.name), "image": s.image, "command": []any{"sh", "-c", s.script},
 			"env":             append([]any{map[string]any{"name": "TZ", "value": tz}}, s.env...),
 			"volumeMounts":    mounts,
 			"securityContext": map[string]any{"allowPrivilegeEscalation": false},
@@ -304,6 +313,36 @@ echo ` + runLine + ` "$TS" $ok
 	return step{name: "finish", image: c.tools, script: script, env: env}
 }
 
+// s3Env is rclone's remote sy: the item's store, the key from its Secret.
+func s3Env(it config.Item) []any {
+	env := []any{map[string]any{"name": "BUCKET", "value": it.Bucket}}
+	for _, kv := range [][2]string{{"TYPE", "s3"}, {"PROVIDER", "Other"}, {"ENDPOINT", it.Endpoint}, {"REGION", it.Region},
+		{"FORCE_PATH_STYLE", fmt.Sprint(!it.VirtualHost)}, {"NO_CHECK_BUCKET", "true"}} {
+		if kv[1] != "" {
+			env = append(env, map[string]any{"name": "RCLONE_CONFIG_SY_" + kv[0], "value": kv[1]})
+		}
+	}
+	return append(env, secretEnv("RCLONE_CONFIG_SY_ACCESS_KEY_ID", it.Secret, it.AccessKeyKey),
+		secretEnv("RCLONE_CONFIG_SY_SECRET_ACCESS_KEY", it.Secret, it.SecretKeyKey))
+}
+
+func s3Dir(it config.Item) string { return sq("/work/s3/" + it.Name) }
+
+// bucketSteps copies the bucket into /work (the S3 image), then tars the copy into the target
+// (the tools image): the object keys are the paths in the tar.
+func bucketSteps(it config.Item, c cluster) []step {
+	d, f := s3Dir(it), `/target/"$TS"_`+it.Name+`.tar.zst`
+	fail := `touch /sy/failed/` + it.Name
+	copyScript := `mkdir -p ` + d + ` && rclone copy -q --retries 1 sy:"$BUCKET" ` + d + ` || { ` + fail + `; echo "` + it.Name + `: the copy of $BUCKET failed"; }`
+	tarScript := `TS=$(cat /sy/ts)
+if [ -e /sy/failed/` + it.Name + ` ]; then rm -rf ` + d + `; echo "` + it.Name + ` failed"; exit 0; fi
+cd ` + d + ` && n=$(find . -type f | wc -l) && { tar -cpf - . || ` + fail + `; } | zstd -q > ` + f + `.part || ` + fail + `
+cd /; rm -rf ` + d + `
+if [ -e /sy/failed/` + it.Name + ` ]; then rm -f ` + f + `.part; echo "` + it.Name + ` failed"; else mv ` + f + `.part ` + f + `; echo "` + it.Name + ` $n objects, $(wc -c < ` + f + `) bytes"; fi`
+	return []step{{name: "s3-" + it.Name, image: c.s3, script: copyScript, env: s3Env(it)},
+		{name: "tar-" + it.Name, image: c.tools, script: tarScript}}
+}
+
 // runPod is a backup run: kind is manual, scheduled or pre-restore.
 func runPod(b config.Backup, c cluster, kind string) map[string]any {
 	steps := []step{{name: "start", image: c.tools, script: startScript}}
@@ -311,9 +350,12 @@ func runPod(b config.Backup, c cluster, kind string) map[string]any {
 		steps = append(steps, hookStep("before"))
 	}
 	for n, it := range b.Items {
-		if it.Kind == "volume" {
+		switch it.Kind {
+		case "volume":
 			steps = append(steps, volumeStep(n, it, c.tools))
-		} else {
+		case "s3":
+			steps = append(steps, bucketSteps(it, c)...)
+		default:
 			steps = append(steps, dumpStep(it, c.images[it.Name]))
 		}
 	}
@@ -337,7 +379,8 @@ type Pick struct {
 }
 
 // restorePod restores the picked items: the dumps unpacked into /work, each database dropped,
-// created and imported as its restore user, each volume emptied and extracted. A failure stops
+// created and imported as its restore user, each volume emptied and extracted, each bucket
+// extracted into /work and synced (what the archive does not have is deleted). A failure stops
 // the rest; the after-hook runs anyway.
 func restorePod(b config.Backup, c cluster, picks []Pick, imp bool) map[string]any {
 	byName := map[string]int{}
@@ -352,7 +395,23 @@ func restorePod(b config.Backup, c cluster, picks []Pick, imp bool) map[string]a
 		it := b.Items[n]
 		f := sq("/target/" + p.File)
 		fail := `{ touch /sy/failed/` + it.Name + `; echo "` + it.Name + ` failed"; }`
-		if it.Kind != "volume" {
+		// a directory of the tar: its members start with ./ when switchyard wrote it
+		tarArgs, pre := "", ""
+		if p.Path != "" {
+			path := strings.Trim(p.Path, "/")
+			pre = fmt.Sprintf(`p=%s; s=%d; zstd -dc %s | tar -tf - | head -1 | grep -q '^\./' && { p=./$p; s=$((s+1)); }`+"\n",
+				sq(path), strings.Count(path, "/")+1, f)
+			tarArgs = ` --strip-components="$s" "$p"`
+		}
+		if it.Kind == "s3" {
+			d := s3Dir(it)
+			steps = append(steps, step{name: "untar-" + it.Name, image: c.tools,
+				script: skip + pre + `mkdir -p ` + d + ` && zstd -dc ` + f + ` | tar -C ` + d + ` -xf -` + tarArgs + ` || ` + fail},
+				step{name: "restore-" + it.Name, image: c.s3, env: s3Env(it),
+					script: skip + `rclone sync -q --retries 1 ` + d + ` sy:"$BUCKET" && echo "` + it.Name + ` restored, $(find ` + d + ` -type f | wc -l) objects in $BUCKET" || ` + fail})
+			continue
+		}
+		if it.Dump() {
 			prep += `zstd -dc ` + f + ` > /work/` + it.Name + `.sql && echo "` + it.Name + ` unpacked" || touch /sy/failed/` + it.Name + "\n"
 			env := []any{map[string]any{"name": "SVC", "value": it.Service}}
 			var script string
@@ -371,11 +430,6 @@ func restorePod(b config.Backup, c cluster, picks []Pick, imp bool) map[string]a
 			continue
 		}
 		d := sq(itemDir(n, it))
-		tarArgs := ""
-		if p.Path != "" {
-			path := strings.Trim(p.Path, "/")
-			tarArgs = fmt.Sprintf(" --strip-components=%d %s", strings.Count(path, "/")+1, sq(path))
-		}
 		// a top-level exclude is not in the archive: it keeps what it has
 		keep := ""
 		for _, e := range it.Exclude {
@@ -383,7 +437,7 @@ func restorePod(b config.Backup, c cluster, picks []Pick, imp bool) map[string]a
 				keep += ` ! -name ` + sq(e)
 			}
 		}
-		script := skip + `mkdir -p ` + d + ` && own=$(stat -c %u:%g ` + d + `) &&
+		script := skip + pre + `mkdir -p ` + d + ` && own=$(stat -c %u:%g ` + d + `) &&
 find ` + d + ` -mindepth 1 -maxdepth 1` + keep + ` -exec rm -rf {} + && zstd -dc ` + f + ` | tar -C ` + d + ` -xpf -` + tarArgs + ` || ` + fail
 		if imp {
 			script += "\n" + `[ -e /sy/failed/` + it.Name + ` ] || chown -R "$own" ` + d

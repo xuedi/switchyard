@@ -38,7 +38,7 @@
     <div class="card blocked" id="restore" hidden>
       <h2 id="rtitle">Restore</h2>
       <div id="rpicks"></div>
-      <label class="check"><input type="checkbox" id="rimport">The archive has another layout (an import): pick a file, and for a volume the directory in its tar, per item</label>
+      <label class="check"><input type="checkbox" id="rimport">The archive has another layout (an import): pick a file, and for a volume or bucket the directory in its tar, per item</label>
       <label class="check"><input type="checkbox" id="rnosafety">Without a safety backup (when the data is too broken for one)</label>
       <label class="check danger"><input type="checkbox" id="rconfirm"><span id="rwarn"></span></label>
       <div id="rtyped" hidden><label for="rtype">A production set: type <code id="rns"></code> to restore it</label><input id="rtype" autocomplete="off" spellcheck="false"></div>
@@ -71,14 +71,17 @@
     <div class="grid">
       <div><label for="target">Target PVC: where the archives go</label><select id="target"></select></div>
       <div><label for="tools">Tools image (sh, tar, zstd, sha256sum)</label><input id="tools" placeholder="the first MariaDB's image"></div>
+      <div></div>
+      <div><label for="s3image">S3 image (sh, rclone), for buckets</label><input id="s3image" placeholder="rclone/rclone:1.75.1"></div>
     </div>
     <label>Items</label>
     <div id="items" class="muted">Loading...</div>
+    <div class="buttons"><button id="addbucket" class="plain">Add an S3 bucket</button></div>
     <div class="grid">
       <div><label for="schedule">Schedule (cron, always hot; empty: by hand only)</label><input id="schedule" placeholder="10 5 * * *"></div>
       <div><label for="tz">Time zone of the schedule and the names</label><input id="tz"></div>
     </div>
-    <label class="check"><input type="checkbox" id="cold">Cold: a backup started here scales the app to 0 first (the databases stay up)</label>
+    <label class="check"><input type="checkbox" id="cold">Cold: a backup started here scales the app to 0 first (the databases and stores stay up)</label>
     <label class="check"><input type="checkbox" id="production">Production: a restore needs the namespace typed in, not a tick</label>
     <div class="grid">
       <div><label for="beforew">Before hook: workload</label><select id="beforew"></select></div>

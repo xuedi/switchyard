@@ -76,16 +76,20 @@ type Backup struct {
 	Cold        bool   `json:"cold,omitempty"`     // runs switchyard starts scale the app to 0 first
 	Schedule    string `json:"schedule,omitempty"` // cron, "" for by hand only; always hot
 	TimeZone    string `json:"timeZone,omitempty"`
-	Tools       string `json:"tools,omitempty"` // image with sh, tar, zstd, sha256sum; "" is the first database's
+	Tools       string `json:"tools,omitempty"`   // image with sh, tar, zstd, sha256sum; "" is the first database's
+	S3Image     string `json:"s3Image,omitempty"` // the buckets' copies; "" is DefaultS3Image
 	KeepDaily   int    `json:"keepDaily,omitempty"`
 	KeepMonthly int    `json:"keepMonthly,omitempty"`
 	Production  bool   `json:"production,omitempty"` // a restore needs the namespace typed in
 }
 
-// Item is one thing a run saves: a database dump or a volume's tar.
+// DefaultS3Image has rclone and sh.
+const DefaultS3Image = "docker.io/rclone/rclone:1.75.1@sha256:45401ad7410db1d67ffdb58e19059ad20b0d8e0285a60e38bbec55cc1019c7a5"
+
+// Item is one thing a run saves: a database dump, a volume's tar or a bucket's.
 type Item struct {
 	Name string `json:"name"` // in the file names: <ts>_<name>.sql.zst or .tar.zst
-	Kind string `json:"kind"` // mariadb, postgres or volume
+	Kind string `json:"kind"` // mariadb, postgres, volume or s3
 
 	Service     string `json:"service,omitempty"`
 	StatefulSet string `json:"statefulSet,omitempty"` // "" is the service's name; not scaled down
@@ -99,10 +103,20 @@ type Item struct {
 	PVC     string   `json:"pvc,omitempty"`
 	SubPath string   `json:"subPath,omitempty"`
 	Exclude []string `json:"exclude,omitempty"`
+
+	Endpoint     string `json:"endpoint,omitempty"` // e.g. http://garage:3900; StatefulSet is the store, "" for one outside
+	Region       string `json:"region,omitempty"`
+	Bucket       string `json:"bucket,omitempty"`
+	VirtualHost  bool   `json:"virtualHost,omitempty"`  // bucket.host addressing, not host/bucket
+	AccessKeyKey string `json:"accessKeyKey,omitempty"` // in Secret
+	SecretKeyKey string `json:"secretKeyKey,omitempty"`
 }
 
+// Dump: a database, not a tar.
+func (i Item) Dump() bool { return i.Kind == "mariadb" || i.Kind == "postgres" }
+
 func (i Item) Ext() string {
-	if i.Kind == "volume" {
+	if !i.Dump() {
 		return ".tar.zst"
 	}
 	return ".sql.zst"
@@ -129,6 +143,13 @@ func (i Item) StatefulSetOr() string {
 type Hook struct {
 	Workload string `json:"workload"` // deployment/<name> or statefulset/<name>
 	Command  string `json:"command"`  // split at spaces, no shell
+}
+
+func (b Backup) S3ImageOr() string {
+	if b.S3Image != "" {
+		return b.S3Image
+	}
+	return DefaultS3Image
 }
 
 func (b Backup) KeepDailyOr() int {

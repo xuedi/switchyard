@@ -1,6 +1,7 @@
 package web
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -359,22 +360,23 @@ func (s *Server) adminBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	dbClaims := map[string]bool{}
 	if k.Get(ctx, &sts, "--namespace="+ns, "get", "statefulsets") == nil {
-		var dbs []config.Item
+		var dbs, stores []config.Item
 		for _, st := range sts.Items {
 			res.Workloads = append(res.Workloads, "statefulset/"+st.Metadata.Name)
 			if len(st.Spec.Template.Spec.Containers) == 0 {
 				continue
 			}
 			c := st.Spec.Template.Spec.Containers[0]
-			it, ok := dbItem(c.Image, c.Env)
-			if !ok {
+			svc := cmp.Or(st.Spec.ServiceName, st.Metadata.Name)
+			if it, ok := storeItem(c.Image, svc); ok {
+				it.StatefulSet = st.Metadata.Name
+				stores = append(stores, it)
+			} else if it, ok := dbItem(c.Image, c.Env); ok {
+				it.StatefulSet, it.Service = st.Metadata.Name, svc
+				dbs = append(dbs, it)
+			} else {
 				continue
 			}
-			it.StatefulSet, it.Service = st.Metadata.Name, st.Spec.ServiceName
-			if it.Service == "" {
-				it.Service = st.Metadata.Name
-			}
-			dbs = append(dbs, it)
 			for _, v := range st.Spec.Template.Spec.Volumes {
 				if v.PersistentVolumeClaim != nil {
 					dbClaims[v.PersistentVolumeClaim.ClaimName] = true
@@ -394,7 +396,7 @@ func (s *Server) adminBackup(w http.ResponseWriter, r *http.Request) {
 				dbs[i].Name = strings.ToLower(dbs[i].Database)
 			}
 		}
-		res.Items = dbs
+		res.Items = append(dbs, stores...)
 	}
 	for _, p := range res.PVCs {
 		if !dbClaims[p] {
@@ -413,6 +415,23 @@ func (s *Server) adminBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	slices.Sort(res.Workloads)
 	writeJSON(w, res)
+}
+
+// storeItem: an S3 store's StatefulSet by its image, its bucket left to the form.
+func storeItem(image, svc string) (config.Item, bool) {
+	low := strings.ToLower(image)
+	it := config.Item{Kind: "s3", AccessKeyKey: "access-key-id", SecretKeyKey: "secret-access-key"}
+	switch {
+	case strings.Contains(low, "garage"):
+		it.Endpoint, it.Region = "http://"+svc+":3900", "garage"
+	case strings.Contains(low, "minio"):
+		it.Endpoint = "http://" + svc + ":9000"
+	case strings.Contains(low, "seaweedfs"):
+		it.Endpoint = "http://" + svc + ":8333"
+	default:
+		return it, false
+	}
+	return it, true
 }
 
 // dbItem reads a database StatefulSet's image and environment, the official images' variables.
@@ -458,6 +477,9 @@ var (
 	secretKey = regexp.MustCompile(`^[-._a-zA-Z0-9]{1,253}$`)
 	cronExpr  = regexp.MustCompile(`^(@(yearly|annually|monthly|weekly|daily|midnight|hourly)|[0-9*/,-]+( [0-9*/,A-Za-z-]+){4})$`)
 	subPath   = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_./-]*$`)
+	endpoint  = regexp.MustCompile(`^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$`)
+	region    = regexp.MustCompile(`^[A-Za-z0-9-]{0,63}$`)
+	bucket    = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 	imageRef  = regexp.MustCompile(`^[a-z0-9][A-Za-z0-9._/:@-]+$`)
 )
 
@@ -505,8 +527,25 @@ func checkBackup(b *config.Backup) error {
 					bad("%s: an empty exclude", it.Name)
 				}
 			}
+		case "s3":
+			if !endpoint.MatchString(it.Endpoint) {
+				bad("%s: the endpoint is a URL like http://garage:3900, not %q", it.Name, it.Endpoint)
+			}
+			if !region.MatchString(it.Region) {
+				bad("%s: no region %q", it.Name, it.Region)
+			}
+			if !bucket.MatchString(it.Bucket) {
+				bad("%s: %q is not a bucket name (a-z, 0-9, . -, 3 to 63)", it.Name, it.Bucket)
+			}
+			if it.StatefulSet != "" {
+				errs = append(errs, checkName("StatefulSet", it.StatefulSet, false))
+			}
+			errs = append(errs, checkName("Secret", it.Secret, false))
+			if !secretKey.MatchString(it.AccessKeyKey) || !secretKey.MatchString(it.SecretKeyKey) {
+				bad("%s needs the Secret's keys of the access key and of the secret key", it.Name)
+			}
 		default:
-			bad("%s: the kind is mariadb, postgres or volume", it.Name)
+			bad("%s: the kind is mariadb, postgres, volume or s3", it.Name)
 		}
 	}
 	for name, h := range map[string]*config.Hook{"before": b.Before, "after": b.After} {
@@ -529,6 +568,9 @@ func checkBackup(b *config.Backup) error {
 	}
 	if b.Tools != "" && !imageRef.MatchString(b.Tools) {
 		bad("the tools image %q is an image reference", b.Tools)
+	}
+	if b.S3Image != "" && !imageRef.MatchString(b.S3Image) {
+		bad("the S3 image %q is an image reference", b.S3Image)
 	}
 	return errors.Join(errs...)
 }
@@ -565,6 +607,22 @@ func (s *Server) saveBackup(r *http.Request, b *config.Backup) error {
 	var pvc struct{ Metadata kube.Meta }
 	if err := k.Get(ctx, &pvc, "--namespace="+b.Namespace, "get", "--", "persistentvolumeclaim", b.Target); err != nil {
 		return err
+	}
+	for _, it := range b.Items {
+		if it.Kind != "s3" {
+			continue
+		}
+		var sec struct {
+			Data map[string]string `json:"data"`
+		}
+		if err := k.Get(ctx, &sec, "--namespace="+b.Namespace, "get", "--", "secret", it.Secret); err != nil {
+			return badRequest(it.Name + ": " + err.Error())
+		}
+		for _, key := range []string{it.AccessKeyKey, it.SecretKeyKey} {
+			if sec.Data[key] == "" {
+				return badRequest(it.Name + ": the Secret " + it.Secret + " has no key " + key)
+			}
+		}
 	}
 	err = s.store.Update(func(cfg *config.Config) error {
 		cfg.Backups = slices.DeleteFunc(cfg.Backups, func(x config.Backup) bool { return x.Namespace == b.Namespace })
