@@ -36,6 +36,7 @@ type BackupView struct {
 	Warning   string // the schedule does not back up: why
 	Suspended bool   // its CronJob is suspended, and nothing of switchyard's holds it
 	NewestAt  string // the newest archive's time
+	Stopped   bool   // the CronJob is suspended with the namespace, Start resumes it
 }
 
 // Archive is one run's files in the target.
@@ -119,7 +120,10 @@ func (s *Server) backupView(ns string) any {
 	}
 	v.Archives, v.Size = archives(set, st)
 	v.IndexAt = st.IndexAt
-	v.Warning, v.Suspended = run.Health(st)
+	v.Warning, v.Suspended = run.Health(st, s.stk().Resumed(ns))
+	if v.Suspended && s.stk().Holds(ns, "cronjob/"+backup.StateName) {
+		v.Warning, v.Suspended, v.Stopped = "", false, true
+	}
 	if len(v.Archives) > 0 {
 		loc := time.UTC
 		if l, err := time.LoadLocation(set.TimeZone); err == nil && set.TimeZone != "" {

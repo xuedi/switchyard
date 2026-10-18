@@ -80,3 +80,12 @@ details summary { cursor: pointer; color: var(--btn); margin: 12px 0 4px; }
 .gap-t { margin-top: 14px; } .gap-b { margin-bottom: 10px; } .gap-b0 { margin: 0 0 10px; }
 .card.item { margin: 6px 0; padding: 8px 12px; }
 select.auto { width: auto; }
+.nshead { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 6px; }
+.nsname { font-weight: 600; font-size: 16px; }
+.nsact { margin-left: auto; }
+.nsact input { width: 160px; padding: 5px 8px; }
+.st-running { color: var(--ok); } .st-starting, .st-stopping, .st-partly { color: var(--warn); } .st-stopped { color: var(--off); }
+table.wl td { border-bottom: 0; padding: 7px 6px 3px; vertical-align: baseline; }
+table.wl tr.w td { border-top: 1px solid var(--line); }
+table.wl tr.w:first-child td { border-top: 0; }
+table.wl tr.pod td { padding: 0 6px 4px 18px; font-size: 13px; }

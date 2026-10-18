@@ -4,6 +4,7 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&
 let editing = "";     // the box being changed, "" for a new one
 let armed = "";       // the box whose Remove waits for a second click
 let details = null;
+let paused = false;
 
 async function getJSON(url) {
   const r = await fetch(url, {cache: "no-store"});
@@ -37,6 +38,7 @@ function backupRow(v) {
     <span class="grow">${newest ? `newest <code>${esc(newest.Run)}</code>${v.NewestAt ? ` <span class="muted">${esc(ago(v.NewestAt))}</span>` : ""}` : `<span class="muted">no archive yet</span>`}
       <span class="muted">${v.Set && v.Set.schedule ? "· " + esc(v.Set.schedule) : "· by hand"}</span>
       ${v.Warning ? `<div class="failed">${esc(v.Warning)}</div>` : ""}
+      ${v.Stopped ? `<div class="muted">The schedule is stopped with the namespace; Start on Running resumes it.</div>` : ""}
       ${v.Error ? `<div class="failed muted">${esc(v.Error)}</div>` : ""}</span>
     <span class="muted">${run ? `last ${esc(run.Kind)} <span class="${esc(run.Status)}">${esc(run.Status)}</span>` : ""}</span>
   </div>`;
@@ -44,6 +46,7 @@ function backupRow(v) {
 
 let lastHTML = "";
 async function poll() {
+  if (document.hidden) { paused = true; return; }
   try {
     const d = await getJSON("boxes");
     $("sub").textContent = d.Cluster ? "on " + d.Cluster : "";
@@ -54,6 +57,7 @@ async function poll() {
   } catch (e) { /* keep the last list */ }
   setTimeout(poll, 3000);
 }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && paused) { paused = false; poll(); } });
 
 function showErr(e) { $("formerr").textContent = String(e.message || e); $("formerr").hidden = false; }
 

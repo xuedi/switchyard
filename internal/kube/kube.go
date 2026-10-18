@@ -189,6 +189,14 @@ type Meta struct {
 type Container struct {
 	Name  string `json:"name"`
 	Image string `json:"image"`
+	Ports []Port `json:"ports,omitempty"`
+}
+
+type Port struct {
+	Name          string `json:"name,omitempty"`
+	ContainerPort int    `json:"containerPort"`
+	HostPort      int    `json:"hostPort,omitempty"`
+	Protocol      string `json:"protocol,omitempty"`
 }
 
 type PodSpec struct {
@@ -248,9 +256,12 @@ type CronJob struct {
 }
 
 type Pod struct {
-	Metadata Meta `json:"metadata"`
+	Metadata Meta    `json:"metadata"`
+	Spec     PodSpec `json:"spec"`
 	Status   struct {
 		Phase      string `json:"phase"`
+		HostIP     string `json:"hostIP"`
+		StartTime  string `json:"startTime"`
 		Conditions []struct {
 			Type   string `json:"type"`
 			Status string `json:"status"`
@@ -261,12 +272,17 @@ type Pod struct {
 }
 
 type ContainerStatus struct {
-	RestartCount int `json:"restartCount"`
+	Name         string `json:"name"`
+	Ready        bool   `json:"ready"`
+	RestartCount int    `json:"restartCount"`
 	State        struct {
 		Waiting *struct {
 			Reason  string `json:"reason"`
 			Message string `json:"message"`
 		} `json:"waiting"`
+		Terminated *struct {
+			Reason string `json:"reason"`
+		} `json:"terminated"`
 	} `json:"state"`
 }
 

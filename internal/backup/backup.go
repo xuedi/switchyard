@@ -935,8 +935,9 @@ func later(a, b string) bool {
 }
 
 // Health says what keeps the schedule from backing up, "" when nothing does; suspended: the
-// CronJob is, and no run of switchyard's holds it.
-func (r *Runner) Health(st State) (warning string, suspended bool) {
+// CronJob is, and no run of switchyard's holds it. A slot before quiet does not count (the
+// namespace was stopped).
+func (r *Runner) Health(st State, quiet time.Time) (warning string, suspended bool) {
 	b := r.Set()
 	r.mu.Lock()
 	c, held := r.cron, r.run != nil
@@ -964,7 +965,7 @@ func (r *Runner) Health(st State) (warning string, suspended bool) {
 	}
 	// a missed slot may still start until startingDeadlineSeconds is over
 	due, ok := lastSlot(b.Schedule, time.Now().Add(-65*time.Minute).In(loc))
-	if ok && c.since.Before(due) {
+	if ok && c.since.Before(due) && quiet.Before(due) {
 		return "No scheduled backup started since " + stamp(c.since.Format(time.RFC3339)) + ", one was due " +
 			stamp(due.Format(time.RFC3339)) + ".", false
 	}

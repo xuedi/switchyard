@@ -26,7 +26,7 @@ function steps(r, list) {
   }).join("");
 }
 
-let clickBusy = false, clickErr = "", armed = "", armTimer = 0, lastLog = "", lastRows = "", lastLinks = "", last = null;
+let paused = false, clickBusy = false, clickErr = "", armed = "", armTimer = 0, lastLog = "", lastRows = "", lastLinks = "", last = null;
 
 // dropsBetween: kept tags from the live one back to just before x that dropped something on
 // purpose: x's code may still need it.
@@ -54,11 +54,12 @@ function render(v) {
 
   $("live").textContent = v.Live || "-";
   $("livesub").textContent = v.Subject || "";
-  $("pods").textContent = `${v.Ready} of ${v.Replicas} pods ready`;
+  const stopped = !!v.Live && v.Replicas === 0;
+  $("pods").innerHTML = stopped ? `stopped: <a href="running">start it on Running</a>` : `${v.Ready} of ${v.Replicas} pods ready`;
   $("repo").textContent = v.Repo || "";
   $("canary").innerHTML = v.Canary ? `Canary <code>${esc(v.Canary.Tag)}</code>: ${v.Canary.Ready} of ${v.Canary.Replicas} pods ready, about ${v.Canary.Share} % of the traffic` : "";
 
-  const busy = v.Busy || clickBusy;
+  const busy = v.Busy || clickBusy || stopped;
   const rows = v.Images || [];
   const html = rows.length ? rows.map(x => {
     let act = "";
@@ -121,6 +122,7 @@ function render(v) {
 }
 
 async function poll() {
+  if (document.hidden) { paused = true; return; }
   try {
     const r = await fetch("state?b=" + encodeURIComponent(box), {cache: "no-store"});
     if (r.status === 401) { location.href = "login"; return; }
@@ -128,6 +130,7 @@ async function poll() {
   } catch (e) { /* switchyard itself unreachable for a moment: keep the last view */ }
   setTimeout(poll, 1000);
 }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && paused) { paused = false; poll(); } });
 
 // A click arms the button, a second click within 4 s sends it. what is canary:<tag>,
 // quick:<tag>, rollback:<tag>, anyway:<kind>:<tag> or abort.

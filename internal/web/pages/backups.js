@@ -14,7 +14,7 @@ const ns = params.get("n") || "";
 const q = "?n=" + encodeURIComponent(ns);
 const NAMES = {manual: "Backup", scheduled: "Scheduled backup", "pre-restore": "Safety backup", restore: "Restore", index: "Listing"};
 
-let last = null, clickErr = "", armed = "", armTimer = 0, lastRows = "", lastLog = "", restoring = null, formOpen = false;
+let paused = false, last = null, clickErr = "", armed = "", armTimer = 0, lastRows = "", lastLog = "", restoring = null, formOpen = false;
 
 async function getJSON(url) {
   const r = await fetch(url, {cache: "no-store"});
@@ -36,6 +36,7 @@ function render(v) {
   const err = clickErr || v.Error || "";
   $("err").textContent = err; $("err").hidden = !err;
   $("warntext").textContent = v.Warning || ""; $("warn").hidden = !v.Warning; $("resume").hidden = !v.Suspended;
+  $("stopped").hidden = !v.Stopped;
   const s = v.Set;
   $("summary").innerHTML = `${(v.Archives || []).length} runs, ${size(v.Size || 0)} on <code>${esc(s.target)}</code>` +
     (v.NewestAt ? `, the newest ${esc(ago(v.NewestAt))}` : "") +
@@ -77,6 +78,7 @@ function render(v) {
 }
 
 async function poll() {
+  if (document.hidden) { paused = true; return; }
   try {
     const r = await fetch("backup/state" + q, {cache: "no-store"});
     if (r.status === 401) { location.href = "login"; return; }
@@ -85,6 +87,7 @@ async function poll() {
   } catch (e) { /* keep the last view */ }
   setTimeout(poll, 2000);
 }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && paused) { paused = false; poll(); } });
 
 async function post(url, body) {
   clickErr = "";

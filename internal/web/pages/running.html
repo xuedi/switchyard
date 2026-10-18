@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>switchyard running</title>
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1><a href="./"><img src="logo.svg" alt="switchyard"></a> Running <small id="sub"></small></h1>
+
+  <div id="offline" class="card offline" hidden>
+    <h1 class="center"><span><span class="dot"></span><span id="cluster">The cluster</span> is offline</span></h1>
+    <p class="muted">Switched off, or still booting. This page notices when it is back.</p>
+  </div>
+
+  <div id="err" class="err" hidden></div>
+
+  <div id="enable" class="card" hidden>
+    <h2>Not enabled yet</h2>
+    <p>To show what runs in every namespace, and to start and stop it, switchyard's service account needs a ClusterRole: it may read the Deployments, StatefulSets, CronJobs, pods and Services of every namespace and change their replica counts through the scale subresource, nothing else (no image, no command, no pod spec).</p>
+    <div class="buttons"><button id="enablebtn">Enable</button><span class="muted">Needs the admin context once.</span></div>
+  </div>
+
+  <div id="list"></div>
+  <p class="muted" id="ver"></p>
+</main>
+<script src="running.js"></script>
+</body>
+</html>

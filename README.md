@@ -5,14 +5,15 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.10.1-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.11.0-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
 </p>
 
 <p align="center"><b>The tiny canary and rollback tool for image-based apps on a small Kubernetes.</b><br>
-Your app pushes a tagged image; switchyard moves a Deployment from tag to tag, and backs it up.<br>
+Your app pushes a tagged image; switchyard moves a Deployment from tag to tag, backs it up,<br>
+and shows what runs, with a Start and a Stop per namespace.<br>
 One Go binary next to kubectl. No operator, no CRDs, no router.</p>
 
 ---
@@ -42,9 +43,13 @@ registry gets a **Canary** and a **Deploy** button, every tag that went live a *
 - **Backups and restores.** A namespace's databases and volumes as plain dated archives on a
   PVC, on a schedule or by hand; a restore takes a safety backup first. See [Backups](#backups).
 - **Least privilege.** The setup creates a service account whose Role covers only what the
-  boxes need, namespace by namespace; the admin context is used only to add a box.
-- **No load when nobody looks.** The page polls every second while it is open; all viewers share
-  one snapshot, and with nobody watching switchyard does not call the cluster.
+  boxes need, namespace by namespace; the admin context is used only to add a box. Cluster-wide
+  it may read the workloads and change replica counts, nothing else (see [Running](#running)).
+- **What runs, at a glance.** One card per namespace with its workloads, pods, CPU and memory,
+  and where to reach them; **Start** and **Stop** a whole namespace in order, databases first,
+  or a single workload.
+- **No load when nobody looks.** The pages poll while they are open and pause in a hidden tab;
+  all viewers share one snapshot, and with nobody watching switchyard does not call the cluster.
 
 ## How it works
 
@@ -68,8 +73,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.10.1/switchyard-0.10.1-linux-amd64
-install -m 0755 switchyard-0.10.1-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.11.0/switchyard-0.11.0-linux-amd64
+install -m 0755 switchyard-0.11.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -79,7 +84,8 @@ kubeconfig is `$KUBECONFIG` or `~/.kube/config`, or the file given with `-kubeco
 installer checks `kubectl` and the kubeconfig, tests the admin context, asks for a user, a
 password and the address to listen on, and then:
 
-- creates the namespace `switchyard` with a service account and its token,
+- creates the namespace `switchyard` with a service account and its token, and the ClusterRole
+  of [Running](#running),
 - writes `~/.config/switchyard/kubeconfig` with only that token, and `config.json` (both 0600),
 - writes `~/.config/systemd/user/switchyard.service`.
 
@@ -220,10 +226,42 @@ timestamp per run, in the set's time zone; a run without a manifest is incomplet
 - **The tools image** runs the volume and listing steps: `sh`, `tar`, `zstd`, `sha256sum`; by
   default the first MariaDB's image, which has them.
 - A backup or restore waits for a canary or deploy in the namespace, and the other way round.
+- A namespace stopped on **Running** has its schedule suspended with it: the backups say so in
+  grey, not as a warning, and Start resumes it. The CronJob stays, so a host backup still skips
+  the namespace; its volumes do not change while it is stopped.
 - **Assumed:** one node (the Job mounts the target and the volumes at once), and NetworkPolicies
   that let a Job's pod reach the databases (its pods carry
   `app.kubernetes.io/managed-by: switchyard`). The Jobs mount the namespace's PVCs and its
   Secrets by reference: with backups, switchyard's Role is close to namespace admin.
+
+## Running
+
+**Running** (in the header) shows every namespace that has a Deployment or a StatefulSet, except
+the cluster's own (`kube-*`, `*-system`, `local-path-storage`, `k0s-autopilot`) and
+`switchyard`; more can be left out with `runningHide` in `config.json`. Per namespace: its
+workloads with ready and wanted replicas, the image, each pod with its containers, restarts and
+why one waits, CPU and memory from metrics-server (when the cluster has it), its CronJobs, and
+where a workload is reached: a pod's host port, a Service's NodePort or LoadBalancer.
+
+| Button | What happens |
+|---|---|
+| **Stop** (namespace) | Its CronJobs suspended, then every Deployment scaled to 0, then every StatefulSet; it waits until their pods are gone, so a `preStop` hook gets its grace period. Wants a second click; a namespace whose backup set is marked production wants its name typed in. |
+| **Start** (namespace) | What its Stop stopped comes back: the StatefulSets first, waited for until ready, then the Deployments, each with the replicas it had, then the CronJobs. With no such Stop (scaled to 0 by hand, say), every workload at 0 starts with 1 replica. |
+| **Stop**, **Start** (workload) | One workload to 0 (a second click) and back to what it had. A workload stopped on its own stays off through a namespace's Stop and Start. |
+
+The replicas that Start brings back are kept in the ConfigMap `switchyard-running` in the
+namespace `switchyard`, not on the workloads. A Start or Stop waits for a deploy or a backup in
+the namespace, and the other way round; a box whose Deployment is at 0 refuses to deploy until
+it is started again.
+
+**What it may do:** the ClusterRole `switchyard-running` lets switchyard's service account read
+the Deployments, StatefulSets, CronJobs, pods and Services of every namespace (so also the plain
+`env` values in pod specs, not the Secrets), read metrics, and change replica counts through the
+`scale` subresource. It cannot change an image, a command or a pod spec. CronJobs are suspended
+only where switchyard has a Role already (a namespace with a box or a backup set); elsewhere
+Stop leaves them running, and the card says so. The installer creates the ClusterRole; an
+installation from before 0.11.0 gets it from the **Enable** button on the page, with the admin
+context once.
 
 ## Development
 

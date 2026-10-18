@@ -19,6 +19,7 @@ import (
 	"github.com/xuedi/switchyard/internal/config"
 	"github.com/xuedi/switchyard/internal/deploy"
 	"github.com/xuedi/switchyard/internal/kube"
+	"github.com/xuedi/switchyard/internal/stack"
 )
 
 //go:embed pages
@@ -37,7 +38,10 @@ type Server struct {
 	mu      sync.Mutex
 	engine  *deploy.Engine
 	backups *backup.Engine
+	stacks  *stack.Engine
 	snaps   map[string]*snapshot
+	usage   map[string]stack.Use // metrics-server's, read at most every 15 s
+	usageAt time.Time
 }
 
 // Options: how switchyard was started.
@@ -92,9 +96,10 @@ func Serve(version string, logo []byte, o Options) error {
 func (s *Server) start(cfg *config.Config) {
 	k := kube.Kube{Bin: cfg.Kubectl, Kubeconfig: config.Kubeconfig()}
 	e := deploy.NewEngine(k)
-	bk := backup.NewEngine(k, s.boxBusy)
+	bk := backup.NewEngine(k, func(ns string) string { return first(s.boxBusy(ns), s.stk().Running(ns)) })
+	st := stack.NewEngine(k, func(ns string) string { return first(s.boxBusy(ns), s.bk().Busy(ns)) })
 	s.mu.Lock()
-	s.engine, s.backups = e, bk
+	s.engine, s.backups, s.stacks = e, bk, st
 	s.mu.Unlock()
 	for _, b := range cfg.Boxes {
 		go func() {
@@ -125,6 +130,22 @@ func (s *Server) eng() *deploy.Engine {
 	return s.engine
 }
 
+func (s *Server) stk() *stack.Engine {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stacks
+}
+
+// first is the first of the strings that is not "".
+func first(a ...string) string {
+	for _, x := range a {
+		if x != "" {
+			return x
+		}
+	}
+	return ""
+}
+
 func page(name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b, _ := pages.ReadFile("pages/" + name)
@@ -151,9 +172,10 @@ func fail(w http.ResponseWriter, err error) {
 	code := http.StatusBadGateway
 	var ref deploy.Refused
 	var bref backup.Refused
+	var sref stack.Refused
 	var bad badRequest
 	switch {
-	case errors.As(err, &ref) || errors.As(err, &bref):
+	case errors.As(err, &ref) || errors.As(err, &bref) || errors.As(err, &sref):
 		code = http.StatusConflict
 	case errors.As(err, &bad):
 		code = http.StatusBadRequest
@@ -216,6 +238,7 @@ func (s *Server) routes() http.Handler {
 	privatePage("GET /box", "box.html")
 	privatePage("GET /password", "password.html")
 	privatePage("GET /backups", "backups.html")
+	privatePage("GET /running", "running.html")
 	open("GET /login", page("login.html"))
 	open("POST /login", s.login)
 	open("POST /logout", func(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +250,7 @@ func (s *Server) routes() http.Handler {
 	})
 	private("POST /logout-all", s.logoutAll)
 	private("POST /password", s.password)
-	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js", "backups.js"} {
+	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js", "backups.js", "running.js"} {
 		open("GET /"+f, page(f))
 	}
 	open("GET /logo.svg", func(w http.ResponseWriter, r *http.Request) {
@@ -262,6 +285,10 @@ func (s *Server) routes() http.Handler {
 	private("GET /admin/backup", s.adminBackup)
 	private("POST /admin/backup", s.adminBackupSave)
 	private("POST /admin/backup/remove", s.adminBackupRemove)
+	private("GET /running/state", s.runningState)
+	private("POST /running/start", func(w http.ResponseWriter, r *http.Request) { s.runningClick(w, r, "start") })
+	private("POST /running/stop", func(w http.ResponseWriter, r *http.Request) { s.runningClick(w, r, "stop") })
+	private("POST /running/enable", s.runningEnable)
 
 	// A click is a real deploy: no other site may trigger one through the browser.
 	return headers(http.NewCrossOriginProtection().Handler(mux))
@@ -411,6 +438,10 @@ func (s *Server) click(w http.ResponseWriter, r *http.Request, kind string) {
 		err = run.Abort(s.by(r))
 	case s.bk().Busy(b.Namespace) != "":
 		err = deploy.Refused(s.bk().Busy(b.Namespace) + " is running in " + b.Namespace + ": the " + kind + " waits for it")
+	case s.stk().Running(b.Namespace) != "":
+		err = deploy.Refused(s.stk().Running(b.Namespace) + " is running: the " + kind + " waits for it")
+	case s.stopped(r.Context(), b):
+		err = deploy.Refused(b.ID() + " is stopped: start it on Running first")
 	default:
 		err = run.Start(kind, tag, r.URL.Query().Get("allow") == "1", s.by(r))
 	}
@@ -421,6 +452,13 @@ func (s *Server) click(w http.ResponseWriter, r *http.Request, kind string) {
 	}
 	s.snap(b.ID()).refresh()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// stopped: the box's Deployment is scaled to 0.
+func (s *Server) stopped(ctx context.Context, b config.Box) bool {
+	var d kube.Deployment
+	err := s.eng().K.Get(ctx, &d, "--namespace="+b.Namespace, "get", "--", "deployment", b.Deployment)
+	return err == nil && d.Replicas() == 0
 }
 
 // snap is the box's shared snapshot.

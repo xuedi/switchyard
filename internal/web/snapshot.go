@@ -34,10 +34,10 @@ func (s *snapshot) get() []byte {
 	s.mu.Unlock()
 	if !fresh {
 		v = s.refresh()
-		select {
-		case s.wake <- struct{}{}:
-		default:
-		}
+	}
+	select {
+	case s.wake <- struct{}{}:
+	default:
 	}
 	return v
 }

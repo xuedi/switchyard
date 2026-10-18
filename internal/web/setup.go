@@ -14,6 +14,7 @@ import (
 	"github.com/xuedi/switchyard/internal/auth"
 	"github.com/xuedi/switchyard/internal/config"
 	"github.com/xuedi/switchyard/internal/kube"
+	"github.com/xuedi/switchyard/internal/stack"
 	"net/http"
 )
 
@@ -125,7 +126,8 @@ func testAdmin(ctx context.Context, f setupForm) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for _, what := range [][]string{{"create", "namespaces"}, {"create", "roles", "--all-namespaces"}, {"create", "rolebindings", "--all-namespaces"}} {
+	for _, what := range [][]string{{"create", "namespaces"}, {"create", "roles", "--all-namespaces"}, {"create", "rolebindings", "--all-namespaces"},
+		{"create", "clusterroles"}, {"create", "clusterrolebindings"}} {
 		ans, _ := k.Run(ctx, nil, append([]string{"auth", "can-i"}, what...)...)
 		if strings.TrimSpace(string(ans)) != "yes" {
 			return "", fmt.Errorf("context %s may not %s: switchyard needs an admin context for the setup", f.Context, strings.Join(what, " "))
@@ -154,6 +156,9 @@ func (s *Server) setupRun(w http.ResponseWriter, r *http.Request) {
 	}
 	admin, _ := adminKube(f)
 	cluster, err := writeKubeconfig(ctx, admin)
+	if err == nil {
+		err = writeRunningRBAC(ctx, admin)
+	}
 	if err != nil {
 		fail(w, err)
 		return
@@ -236,6 +241,49 @@ func writeKubeconfig(ctx context.Context, admin kube.Kube) (string, error) {
 		"contexts": []any{map[string]any{"name": "switchyard", "context": map[string]any{"cluster": cl.Name, "user": "switchyard"}}},
 	}
 	return cl.Name, config.WriteFile(config.Kubeconfig(), kc)
+}
+
+// writeRunningRBAC lets switchyard's service account read the workloads of every namespace and
+// scale them, through the scale subresource only, and keep what Start brings back in a
+// ConfigMap of its own namespace.
+func writeRunningRBAC(ctx context.Context, admin kube.Kube) error {
+	rule := func(group string, res []string, verbs []string, names ...string) map[string]any {
+		m := map[string]any{"apiGroups": []string{group}, "resources": res, "verbs": verbs}
+		if len(names) > 0 {
+			m["resourceNames"] = names
+		}
+		return m
+	}
+	labels := map[string]string{"app.kubernetes.io/managed-by": "switchyard"}
+	read := []string{"get", "list"}
+	subjects := []any{map[string]string{"kind": "ServiceAccount", "name": accountName, "namespace": accountNS}}
+	objs := []map[string]any{
+		{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRole", "metadata": map[string]any{"name": stack.MemoryName, "labels": labels},
+			"rules": []any{
+				rule("", []string{"pods", "services"}, read),
+				rule("apps", []string{"deployments", "statefulsets"}, read),
+				rule("batch", []string{"cronjobs"}, read),
+				rule("metrics.k8s.io", []string{"pods"}, read),
+				rule("apps", []string{"deployments/scale", "statefulsets/scale"}, []string{"get", "patch", "update"}),
+			}},
+		{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "ClusterRoleBinding", "metadata": map[string]any{"name": stack.MemoryName, "labels": labels},
+			"roleRef":  map[string]string{"apiGroup": "rbac.authorization.k8s.io", "kind": "ClusterRole", "name": stack.MemoryName},
+			"subjects": subjects},
+		{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "Role", "metadata": map[string]any{"name": stack.MemoryName, "namespace": accountNS, "labels": labels},
+			"rules": []any{
+				rule("", []string{"configmaps"}, []string{"create"}),
+				rule("", []string{"configmaps"}, []string{"get", "patch", "update"}, stack.MemoryName),
+			}},
+		{"apiVersion": "rbac.authorization.k8s.io/v1", "kind": "RoleBinding", "metadata": map[string]any{"name": stack.MemoryName, "namespace": accountNS, "labels": labels},
+			"roleRef":  map[string]string{"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": stack.MemoryName},
+			"subjects": subjects},
+	}
+	for _, o := range objs {
+		if err := admin.Apply(ctx, o); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeUnit() (string, error) {

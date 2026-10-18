@@ -27,6 +27,8 @@ type Config struct {
 
 	Boxes   []Box    `json:"boxes"`
 	Backups []Backup `json:"backups,omitempty"`
+
+	RunningHide []string `json:"runningHide,omitempty"` // namespaces the Running page leaves out
 }
 
 // Box is one app: a Deployment whose image switchyard moves from tag to tag.
