@@ -82,7 +82,9 @@ func (s Session) Live(user string, generation int, now time.Time) bool {
 }
 
 // SetSession writes the cookie. No Path: the browser takes the page's directory, so the cookie
-// stays inside a reverse proxy's prefix.
+// stays inside a reverse proxy's prefix. Only a request in switchyard's top directory may set
+// it: one below (backup/state) would leave a second cookie for that directory, which the browser
+// sends first there.
 func SetSession(w http.ResponseWriter, secret string, s Session, secure bool) {
 	msg := strings.Join([]string{base64.RawURLEncoding.EncodeToString([]byte(s.User)), strconv.Itoa(s.Generation),
 		strconv.FormatInt(s.Start.Unix(), 10), strconv.FormatInt(s.Seen.Unix(), 10)}, ".")
@@ -94,17 +96,25 @@ func ClearSession(w http.ResponseWriter, secure bool) {
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", MaxAge: -1, HttpOnly: true, Secure: secure, SameSite: http.SameSiteLaxMode})
 }
 
-// ReadSession returns the request's session if its signature holds; Live says if it still counts.
-func ReadSession(r *http.Request, secret string) (Session, bool) {
-	c, err := r.Cookie(cookieName)
-	if err != nil {
-		return Session{}, false
+// ReadSessions returns the request's sessions whose signature holds, and how many cookies of
+// switchyard's it carried (more than one: one is left from a directory below, by 0.12.0 or older).
+func ReadSessions(r *http.Request, secret string) ([]Session, int) {
+	var list []Session
+	cookies := r.CookiesNamed(cookieName)
+	for _, c := range cookies {
+		if s, ok := readSession(c.Value, secret); ok {
+			list = append(list, s)
+		}
 	}
-	i := strings.LastIndexByte(c.Value, '.')
+	return list, len(cookies)
+}
+
+func readSession(value, secret string) (Session, bool) {
+	i := strings.LastIndexByte(value, '.')
 	if i < 0 {
 		return Session{}, false
 	}
-	msg, sig := c.Value[:i], c.Value[i+1:]
+	msg, sig := value[:i], value[i+1:]
 	if !hmac.Equal([]byte(sig), []byte(sign(secret, msg))) {
 		return Session{}, false
 	}

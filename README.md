@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.12.0-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.13.0-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -73,8 +73,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.12.0/switchyard-0.12.0-linux-amd64
-install -m 0755 switchyard-0.12.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.13.0/switchyard-0.13.0-linux-amd64
+install -m 0755 switchyard-0.13.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -109,9 +109,12 @@ headers count.
 - **The login:** a signed session cookie that ends 12 hours after the last request, a week
   after the login at the latest. Ten failed logins from one client in 15 minutes lock it out
   for 15 minutes, and one password check runs at a time.
-- **Password** (in the header) changes the password and logs out every other session; **Log out
+- **Login** (in the header) changes the password and logs out every other session; **Log out
   everywhere** there ends them all. A forgotten password: `switchyard password` on the machine
   sets a new one and ends every session, then `systemctl --user restart switchyard`.
+- **Turn the login off** there (with the password) when the proxy in front authenticates
+  already, say with client certificates: then whoever reaches switchyard can deploy, restore and
+  stop, so only where nothing else reaches its port. **Turn the login on** brings it back.
 - Clicks are protected against cross-site requests; the pages run only their own scripts and
   are framed only by their own origin.
 - Every action leaves one `audit` line in the journal (`journalctl --user -u switchyard`): the

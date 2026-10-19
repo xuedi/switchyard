@@ -239,7 +239,13 @@ func (s *Server) routes() http.Handler {
 	privatePage("GET /password", "password.html")
 	privatePage("GET /backups", "backups.html")
 	privatePage("GET /running", "running.html")
-	open("GET /login", page("login.html"))
+	open("GET /login", func(w http.ResponseWriter, r *http.Request) {
+		if cfg := s.store.Get(); cfg != nil && cfg.NoLogin {
+			redirect(w, "./")
+			return
+		}
+		page("login.html")(w, r)
+	})
 	open("POST /login", s.login)
 	open("POST /logout", func(w http.ResponseWriter, r *http.Request) {
 		if s.session(w, r) {
@@ -250,6 +256,11 @@ func (s *Server) routes() http.Handler {
 	})
 	private("POST /logout-all", s.logoutAll)
 	private("POST /password", s.password)
+	private("POST /login-off", func(w http.ResponseWriter, r *http.Request) { s.loginSwitch(w, r, true) })
+	private("POST /login-on", func(w http.ResponseWriter, r *http.Request) { s.loginSwitch(w, r, false) })
+	private("GET /login-state", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]bool{"Login": !s.store.Get().NoLogin})
+	})
 	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js", "backups.js", "running.js"} {
 		open("GET /"+f, page(f))
 	}
@@ -323,7 +334,7 @@ func (s *Server) by(r *http.Request) string {
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	cfg := s.store.Get()
-	if cfg == nil {
+	if cfg == nil || cfg.NoLogin {
 		redirect(w, "./")
 		return
 	}
@@ -359,23 +370,69 @@ func (s *Server) newSession(w http.ResponseWriter, r *http.Request, cfg *config.
 	auth.SetSession(w, cfg.Secret, auth.Session{User: cfg.User, Generation: cfg.Generation, Start: now, Seen: now}, s.trusted.https(r))
 }
 
-// session: the request has a live session; it is renewed when its last request is a while ago,
-// so it ends after auth.Idle without one.
+// session: the request has a live session, or the login is off. A request in the top directory
+// renews it when its last request is a while ago, so it ends after auth.Idle without one; a
+// request below drops a cookie of its own directory that is stale or beside another.
 func (s *Server) session(w http.ResponseWriter, r *http.Request) bool {
 	cfg := s.store.Get()
 	if cfg == nil {
 		return false
 	}
-	ses, ok := auth.ReadSession(r, cfg.Secret)
+	if cfg.NoLogin {
+		return true
+	}
+	list, n := auth.ReadSessions(r, cfg.Secret)
 	now := time.Now()
-	if !ok || !ses.Live(cfg.User, cfg.Generation, now) {
+	var ses auth.Session
+	live := false
+	for _, x := range list {
+		if x.Live(cfg.User, cfg.Generation, now) {
+			ses, live = x, true
+			break
+		}
+	}
+	top := strings.Count(r.URL.Path, "/") == 1
+	if !top && (n > 1 || n == 1 && !live) {
+		auth.ClearSession(w, s.trusted.https(r))
+	}
+	if !live {
 		return false
 	}
-	if now.Sub(ses.Seen) > 5*time.Minute {
+	if top && now.Sub(ses.Seen) > 5*time.Minute {
 		ses.Seen = now
 		auth.SetSession(w, cfg.Secret, ses, s.trusted.https(r))
 	}
 	return true
+}
+
+// loginSwitch turns the login off, with the password as for a change, or on again, keeping this
+// browser logged in.
+func (s *Server) loginSwitch(w http.ResponseWriter, r *http.Request, off bool) {
+	cfg := s.store.Get()
+	action := "login-on"
+	if off {
+		action = "login-off"
+		ok, locked := s.limiter.Try(s.trusted.client(r), func() bool { return auth.Check(cfg.Hash, r.FormValue("old")) })
+		if !ok {
+			why, msg := "old", "wrong password"
+			if locked {
+				why, msg = "locked", "locked out"
+			}
+			s.audit(r, cfg.User, action, "", "", errors.New(msg))
+			redirect(w, "password?failed="+why)
+			return
+		}
+	}
+	err := s.store.Update(func(c *config.Config) error { c.NoLogin = off; return nil })
+	s.audit(r, cfg.User, action, "", "", err)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	if !off {
+		s.newSession(w, r, s.store.Get())
+	}
+	redirect(w, "password?"+action+"=1")
 }
 
 // logoutAll ends every session, this one too.
@@ -496,5 +553,5 @@ func (s *Server) boxes(w http.ResponseWriter, r *http.Request) {
 	for _, set := range cfg.Backups {
 		backups = append(backups, s.bsnap(set.Namespace).get())
 	}
-	writeJSON(w, map[string]any{"Version": s.version, "Cluster": cfg.Cluster, "Boxes": list, "Backups": backups})
+	writeJSON(w, map[string]any{"Version": s.version, "Login": !cfg.NoLogin, "Cluster": cfg.Cluster, "Boxes": list, "Backups": backups})
 }
