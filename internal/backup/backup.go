@@ -842,7 +842,7 @@ func (r *Runner) applyCron(ctx context.Context) error {
 	}
 	c.live = nil
 	job := jobObject(b.Namespace, "", "scheduled", runPod(b, c, "scheduled"))["spec"]
-	spec := map[string]any{"schedule": b.Schedule, "concurrencyPolicy": "Forbid", "startingDeadlineSeconds": 3600,
+	spec := map[string]any{"schedule": b.Schedule, "concurrencyPolicy": "Forbid", "startingDeadlineSeconds": 86400,
 		"successfulJobsHistoryLimit": 3, "failedJobsHistoryLimit": 3,
 		"jobTemplate": map[string]any{"metadata": map[string]any{"labels": map[string]string{kindLabel: "scheduled"}}, "spec": job}}
 	if b.TimeZone != "" {
@@ -973,7 +973,8 @@ func (r *Runner) Health(st State, quiet time.Time) (warning string, suspended bo
 	if l, err := time.LoadLocation(b.TimeZone); err == nil && b.TimeZone != "" {
 		loc = l
 	}
-	// a missed slot may still start until startingDeadlineSeconds is over
+	// a slot gets an hour to start; one missed while the cluster was off still starts for a day
+	// (startingDeadlineSeconds), and then counts as run
 	due, ok := lastSlot(b.Schedule, time.Now().Add(-65*time.Minute).In(loc))
 	if ok && c.since.Before(due) && quiet.Before(due) {
 		return "No scheduled backup started since " + stamp(c.since.Format(time.RFC3339)) + ", one was due " +

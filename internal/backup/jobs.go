@@ -205,23 +205,32 @@ while :; do TS=$(date +%Y-%m-%d_%H-%M); ls /target/"$TS"_* >/dev/null 2>&1 || br
 echo "$TS" > /sy/ts; echo "run $TS"`
 
 // dumpStep dumps a database in its own image, through zstd into the target, or into /work when
-// the image has no zstd (the last step compresses it).
-func dumpStep(it config.Item, image string) step {
+// the image has no zstd (the last step compresses it). wait: up to 10 minutes for the database
+// first (a scheduled run that catches up after a boot).
+func dumpStep(it config.Item, image string, wait bool) step {
 	n, f := it.Name, `/target/"$TS"_`+it.Name+`.sql.zst`
 	fail := `touch /sy/failed/` + n
-	var dump string
+	var dump, ready string
 	env := []any{map[string]any{"name": "SVC", "value": it.Service}, map[string]any{"name": "DB", "value": it.Database},
 		map[string]any{"name": "DBUSER", "value": it.User}}
 	switch it.Kind {
 	case "mariadb":
 		dump = `"$(command -v mariadb-dump || command -v mysqldump)" --single-transaction -h "$SVC" -u "$DBUSER" "$DB"`
+		ready = `a=$(command -v mariadb-admin || command -v mysqladmin) || return 0; "$a" ping --silent -h "$SVC" -u "$DBUSER" >/dev/null 2>&1`
 		env = append(env, secretEnv("MYSQL_PWD", it.Secret, it.PasswordKey))
 	default:
 		dump = `pg_dump -h "$SVC" -U "$DBUSER" -d "$DB"`
+		ready = `command -v pg_isready >/dev/null || return 0; pg_isready -q -h "$SVC" -U "$DBUSER" -d "$DB"`
 		env = append(env, secretEnv("PGPASSWORD", it.Secret, it.PasswordKey))
 	}
 	script := `TS=$(cat /sy/ts)
-if command -v zstd >/dev/null; then
+`
+	if wait {
+		script += `ready() { ` + ready + `; }
+i=0; until ready || [ $i -ge 60 ]; do [ $i = 0 ] && echo "` + n + `: waiting for $SVC"; i=$((i+1)); sleep 10; done
+`
+	}
+	script += `if command -v zstd >/dev/null; then
   { ` + dump + ` || ` + fail + `; } | zstd -q > ` + f + `.part || ` + fail + `
   if [ -e /sy/failed/` + n + ` ]; then rm -f ` + f + `.part; echo "` + n + ` failed"; else mv ` + f + `.part ` + f + `; echo "` + n + ` $(wc -c < ` + f + `) bytes"; fi
 else
@@ -329,11 +338,17 @@ func s3Env(it config.Item) []any {
 func s3Dir(it config.Item) string { return sq("/work/s3/" + it.Name) }
 
 // bucketSteps copies the bucket into /work (the S3 image), then tars the copy into the target
-// (the tools image): the object keys are the paths in the tar.
-func bucketSteps(it config.Item, c cluster) []step {
+// (the tools image): the object keys are the paths in the tar. wait: the copy is tried for 10
+// minutes.
+func bucketSteps(it config.Item, c cluster, wait bool) []step {
 	d, f := s3Dir(it), `/target/"$TS"_`+it.Name+`.tar.zst`
 	fail := `touch /sy/failed/` + it.Name
 	copyScript := `mkdir -p ` + d + ` && rclone copy -q --retries 1 sy:"$BUCKET" ` + d + ` || { ` + fail + `; echo "` + it.Name + `: the copy of $BUCKET failed"; }`
+	if wait {
+		copyScript = `mkdir -p ` + d + `; i=0; until rclone copy -q --retries 1 sy:"$BUCKET" ` + d + `; do i=$((i+1))
+  [ $i -ge 30 ] && { ` + fail + `; echo "` + it.Name + `: the copy of $BUCKET failed"; break; }
+  echo "` + it.Name + `: the copy of $BUCKET failed, again in 20 s"; sleep 20; done`
+	}
 	tarScript := `TS=$(cat /sy/ts)
 if [ -e /sy/failed/` + it.Name + ` ]; then rm -rf ` + d + `; echo "` + it.Name + ` failed"; exit 0; fi
 cd ` + d + ` && n=$(find . -type f | wc -l) && { tar -cpf - . || ` + fail + `; } | zstd -q > ` + f + `.part || ` + fail + `
@@ -354,9 +369,9 @@ func runPod(b config.Backup, c cluster, kind string) map[string]any {
 		case "volume":
 			steps = append(steps, volumeStep(n, it, c.tools))
 		case "s3":
-			steps = append(steps, bucketSteps(it, c)...)
+			steps = append(steps, bucketSteps(it, c, kind == "scheduled")...)
 		default:
-			steps = append(steps, dumpStep(it, c.images[it.Name]))
+			steps = append(steps, dumpStep(it, c.images[it.Name], kind == "scheduled"))
 		}
 	}
 	if b.After != nil {
