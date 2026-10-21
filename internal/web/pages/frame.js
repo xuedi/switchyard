@@ -1,6 +1,6 @@
 "use strict";
-// Inside a dashboard: the links leave the top for the version's line at the bottom, the page's own
-// (a box's site and mail) on the left, the navigation on the right.
+// Inside a dashboard: no heading; the version's line at the bottom takes the page's own links and
+// buttons (a box's site and mail, Expand all) on the left, the navigation on the right.
 (() => {
   const root = document.documentElement;
   if (!root.classList.contains("embedded")) return;
@@ -10,8 +10,7 @@
   if (!ver) { ver = document.createElement("p"); ver.id = "ver"; }
   ver.classList.add("muted");
   foot.appendChild(ver);
-  const links = document.querySelector("h1 .links");
-  if (links) foot.appendChild(links);
+  for (const el of document.querySelectorAll("h1.top .links, h1.top .right:not(.navtop)")) foot.appendChild(el);
   const nav = document.createElement("nav");
   nav.className = "footnav";
   for (const t of document.querySelectorAll(".tabbar a")) {

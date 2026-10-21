@@ -130,10 +130,11 @@ ul.wlist li .muted { margin-top: 2px; }
 .pd.wait { background: var(--warn); } .pd.bad { background: var(--stop); }
 .cronline { font-size: 13px; padding: 9px 0 0; border-top: 1px solid var(--line); }
 .tabbar { display: none; }
-.embedded h1 img, .embedded h1 .logo, .embedded .navtop, .embedded h1.brand { display: none; }
+.embedded h1.top { display: none; }
 .foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin: 14px 0 0; }
 .foot #ver { margin: 0; }
 .foot .links { display: inline-flex; gap: 12px; font-size: 13px; }
+.foot .right button.plain { padding: 0; font-size: 13px; min-height: 0; }
 .footnav { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; font-size: 13px; }
 .footnav a.on { color: var(--text); font-weight: 600; text-decoration: none; }
 .footnav form { display: inline; }
