@@ -268,15 +268,12 @@ for f in *; do [ -f "$f" ] && printf 'F\t%s\t%s\n' "$f" "$(wc -c < "$f")"; done
 for f in *_manifest.json; do [ -f "$f" ] && printf 'M\t%s\t%s\n' "$f" "$(tr -d '\n\t' < "$f")"; done
 echo ` + indexEnd
 
-// pruneScript keeps every run of the newest daily dates, and of the older ones the earliest
-// complete run of each month for the newest monthly months; the rest goes, run by run. Complete:
-// a manifest, or (written before switchyard) every item of the set.
-const pruneScript = `ls -1 | sed -n 's/^\([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]_[0-9][0-9]-[0-9][0-9]\)_.*/\1/p' | sort -u > /sy/runs
-while read ts; do
-  c=0; [ -e "${ts}_manifest.json" ] && c=1
-  if [ $c = 0 ]; then c=1; for i in $ITEMS; do ls "${ts}_$i".* >/dev/null 2>&1 || c=0; done; fi
-  echo "$ts $c"
-done < /sy/runs | awk -v daily="$KEEP_DAILY" -v monthly="$KEEP_MONTHLY" '
+// pruneScript keeps every run of the newest daily dates, and of the older ones the earliest run
+// of each month for the newest monthly months; the rest goes, run by run. Only runs with a
+// manifest count: archives from before switchyard, and a run cut off halfway, are never pruned
+// (the user deletes those by hand).
+const pruneScript = `ls -1 | sed -n 's/^\([0-9]\{4\}-[0-9][0-9]-[0-9][0-9]_[0-9][0-9]-[0-9][0-9]\)_manifest\.json$/\1/p' | sort -u > /sy/runs
+while read ts; do echo "$ts 1"; done < /sy/runs | awk -v daily="$KEEP_DAILY" -v monthly="$KEEP_MONTHLY" '
 { ts[NR] = $1; full[NR] = $2; d = substr($1, 1, 10); if (!(d in seen)) { seen[d] = 1; dates[++nd] = d } }
 END {
   for (i = nd; i > nd - daily && i > 0; i--) recent[dates[i]] = 1

@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.16.2-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.16.3-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -82,8 +82,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.16.2/switchyard-0.16.2-linux-amd64
-install -m 0755 switchyard-0.16.2-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.16.3/switchyard-0.16.3-linux-amd64
+install -m 0755 switchyard-0.16.3-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -237,9 +237,11 @@ timestamp per run, in the set's time zone; a run without a manifest is incomplet
   than an hour ago without a run. The newest archive shows its age.
 - **Hooks:** a command run in a container made from a workload's pod spec, e.g. a maintenance
   mode on and off; its image needs `sh`.
-- **Retention:** every run of the 5 newest dates, then the earliest complete run of each month
-  for 12 months; a run goes as a whole. switchyard writes `.switchyard` into its target: a
-  pruner of the host's should skip such a directory.
+- **Retention:** every run of the 5 newest dates, then the earliest run of each month for 12
+  months; a run goes as a whole. Only runs with a manifest count: archives from before
+  switchyard (or of a run cut off halfway) in the same directory are never pruned, they are
+  yours to delete. switchyard writes `.switchyard` into its target: a pruner of the host's should
+  skip such a directory.
 - **Restore** a run, all of it or single items: tick the warning that says what will happen (a
   set marked **production** wants the namespace typed in instead). First a
   safety backup of the set (marked pre-restore; it can be skipped when the data is too broken
