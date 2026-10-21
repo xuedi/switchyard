@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.14.0-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.14.1-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -73,8 +73,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.14.0/switchyard-0.14.0-linux-amd64
-install -m 0755 switchyard-0.14.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.14.1/switchyard-0.14.1-linux-amd64
+install -m 0755 switchyard-0.14.1-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -109,7 +109,7 @@ headers count.
 - **The login:** a signed session cookie that ends 12 hours after the last request, a week
   after the login at the latest. Ten failed logins from one client in 15 minutes lock it out
   for 15 minutes, and one password check runs at a time.
-- **Login** (in the header) changes the password and logs out every other session; **Log out
+- **Settings** (in the header) changes the password and logs out every other session; **Log out
   everywhere** there ends them all. A forgotten password: `switchyard password` on the machine
   sets a new one and ends every session, then `systemctl --user restart switchyard`.
 - **Turn the login off** there (with the password) when the proxy in front authenticates
@@ -287,7 +287,7 @@ most, the answer kept for 5 s and shared by every page), so a cluster whose mach
 shows up as **offline** at once instead of after kubectl's own retries, and the pages notice by
 themselves when it answers again.
 
-When the machine can be switched on from here, set a **power-on command** under **Login** (in
+When the machine can be switched on from here, set a **power-on command** under **Settings** (in
 the header; saving it needs the password, since it runs on this machine as switchyard's user).
 While the cluster is offline, every page then offers **Start server**, which runs the command
 with `sh -c`, for a minute at most, with the user and the password given there as
