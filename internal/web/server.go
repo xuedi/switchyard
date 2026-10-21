@@ -42,6 +42,7 @@ type Server struct {
 	snaps   map[string]*snapshot
 	usage   map[string]stack.Use // metrics-server's, read at most every 15 s
 	usageAt time.Time
+	power   powerRun
 }
 
 // Options: how switchyard was started.
@@ -261,7 +262,7 @@ func (s *Server) routes() http.Handler {
 	private("GET /login-state", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]bool{"Login": !s.store.Get().NoLogin})
 	})
-	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js", "backups.js", "running.js"} {
+	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js", "backups.js", "running.js", "power.js"} {
 		open("GET /"+f, page(f))
 	}
 	open("GET /logo.svg", func(w http.ResponseWriter, r *http.Request) {
@@ -300,6 +301,9 @@ func (s *Server) routes() http.Handler {
 	private("POST /running/start", func(w http.ResponseWriter, r *http.Request) { s.runningClick(w, r, "start") })
 	private("POST /running/stop", func(w http.ResponseWriter, r *http.Request) { s.runningClick(w, r, "stop") })
 	private("POST /running/enable", s.runningEnable)
+	private("GET /power", s.powerState)
+	private("POST /power", s.powerSave)
+	private("POST /power/on", s.powerOn)
 
 	// A click is a real deploy: no other site may trigger one through the browser.
 	return headers(http.NewCrossOriginProtection().Handler(mux))
@@ -412,14 +416,7 @@ func (s *Server) loginSwitch(w http.ResponseWriter, r *http.Request, off bool) {
 	action := "login-on"
 	if off {
 		action = "login-off"
-		ok, locked := s.limiter.Try(s.trusted.client(r), func() bool { return auth.Check(cfg.Hash, r.FormValue("old")) })
-		if !ok {
-			why, msg := "old", "wrong password"
-			if locked {
-				why, msg = "locked", "locked out"
-			}
-			s.audit(r, cfg.User, action, "", "", errors.New(msg))
-			redirect(w, "password?failed="+why)
+		if !s.checkOld(w, r, action) {
 			return
 		}
 	}
@@ -447,8 +444,8 @@ func (s *Server) logoutAll(w http.ResponseWriter, r *http.Request) {
 	redirect(w, "login")
 }
 
-// password changes the password and ends every other session.
-func (s *Server) password(w http.ResponseWriter, r *http.Request) {
+// checkOld: the form's current password is right; otherwise the answer is sent already.
+func (s *Server) checkOld(w http.ResponseWriter, r *http.Request, action string) bool {
 	cfg := s.store.Get()
 	ok, locked := s.limiter.Try(s.trusted.client(r), func() bool { return auth.Check(cfg.Hash, r.FormValue("old")) })
 	if !ok {
@@ -456,8 +453,16 @@ func (s *Server) password(w http.ResponseWriter, r *http.Request) {
 		if locked {
 			why, msg = "locked", "locked out"
 		}
-		s.audit(r, cfg.User, "password-change", "", "", errors.New(msg))
+		s.audit(r, cfg.User, action, "", "", errors.New(msg))
 		redirect(w, "password?failed="+why)
+	}
+	return ok
+}
+
+// password changes the password and ends every other session.
+func (s *Server) password(w http.ResponseWriter, r *http.Request) {
+	cfg := s.store.Get()
+	if !s.checkOld(w, r, "password-change") {
 		return
 	}
 	pw := r.FormValue("new")
@@ -553,5 +558,6 @@ func (s *Server) boxes(w http.ResponseWriter, r *http.Request) {
 	for _, set := range cfg.Backups {
 		backups = append(backups, s.bsnap(set.Namespace).get())
 	}
-	writeJSON(w, map[string]any{"Version": s.version, "Login": !cfg.NoLogin, "Cluster": cfg.Cluster, "Boxes": list, "Backups": backups})
+	writeJSON(w, map[string]any{"Version": s.version, "Login": !cfg.NoLogin, "Cluster": cfg.Cluster, "Online": s.eng().K.Online(r.Context()),
+		"Boxes": list, "Backups": backups})
 }

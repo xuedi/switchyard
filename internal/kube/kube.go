@@ -9,12 +9,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -70,9 +73,68 @@ func (k Kube) args(args []string) []string {
 	return append(a, args...)
 }
 
+// reach is whether the API server takes a connection, asked at most every 5 s and shared by every
+// Kube on the same kubeconfig and context: kubectl itself needs about 15 s to give up on a
+// machine that is off.
+type reach struct {
+	mu   sync.Mutex
+	addr string
+	up   bool
+	at   time.Time
+}
+
+var reaches sync.Map
+
+// Online dials the API server, 2 s at most. A kubeconfig without a server counts as online, so
+// kubectl says what is wrong.
+func (k Kube) Online(ctx context.Context) bool {
+	up, _ := k.reach(ctx)
+	return up
+}
+
+func (k Kube) reach(ctx context.Context) (bool, string) {
+	v, _ := reaches.LoadOrStore(k.Kubeconfig+"\x00"+k.Context, &reach{})
+	r := v.(*reach)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if time.Since(r.at) < 5*time.Second {
+		return r.up, r.addr
+	}
+	out, _ := exec.CommandContext(ctx, k.Bin, k.args([]string{"config", "view", "--minify", "-o", "jsonpath={.clusters[0].cluster.server}"})...).Output()
+	r.addr, r.up = "", true
+	if u, err := url.Parse(strings.TrimSpace(string(out))); err == nil && u.Hostname() != "" {
+		r.addr = u.Host
+		if u.Port() == "" {
+			r.addr = net.JoinHostPort(u.Hostname(), "443")
+		}
+		d := net.Dialer{Timeout: 2 * time.Second}
+		c, err := d.DialContext(ctx, "tcp", r.addr)
+		if r.up = err == nil; r.up {
+			c.Close()
+		}
+	}
+	if ctx.Err() == nil {
+		r.at = time.Now()
+	}
+	return r.up, r.addr
+}
+
+func (k Kube) offline(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "config" {
+		return nil
+	}
+	if up, addr := k.reach(ctx); !up {
+		return &Error{Msg: "kubectl " + strings.Join(args, " ") + ": the API server at " + addr + " does not answer", Offline: true}
+	}
+	return nil
+}
+
 // Run runs kubectl with the args and returns its stdout. Names from outside go after a "--",
 // so none of them can become an option.
 func (k Kube) Run(ctx context.Context, stdin []byte, args ...string) ([]byte, error) {
+	if err := k.offline(ctx, args); err != nil {
+		return nil, err
+	}
 	cmd := exec.CommandContext(ctx, k.Bin, k.args(append([]string{"--request-timeout=10s"}, args...))...)
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
@@ -119,6 +181,9 @@ var forwarding = regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+) ->`)
 // 127.0.0.1:<port>. It goes through the kubelet, so a NetworkPolicy in front of the pod does
 // not get in the way.
 func (k Kube) PortForward(ctx context.Context, ns, pod string, port int) (string, error) {
+	if err := k.offline(ctx, []string{"port-forward", "pod/" + pod}); err != nil {
+		return "", err
+	}
 	cmd := exec.CommandContext(ctx, k.Bin, k.args([]string{"--namespace=" + ns, "port-forward", "--address=127.0.0.1", "--", "pod/" + pod, fmt.Sprintf(":%d", port)})...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

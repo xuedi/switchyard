@@ -30,6 +30,16 @@ type Config struct {
 	Backups []Backup `json:"backups,omitempty"`
 
 	RunningHide []string `json:"runningHide,omitempty"` // namespaces the Running page leaves out
+
+	Power Power `json:"power,omitzero"`
+}
+
+// Power switches the cluster's machine on: a shell command with the user and the password in its
+// environment, as SY_POWER_USER and SY_POWER_PASSWORD.
+type Power struct {
+	Command  string `json:"command,omitempty"`
+	User     string `json:"user,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 // Box is one app: a Deployment whose image switchyard moves from tag to tag.

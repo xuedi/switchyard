@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.13.1-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.14.0-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -73,8 +73,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.13.1/switchyard-0.13.1-linux-amd64
-install -m 0755 switchyard-0.13.1-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.14.0/switchyard-0.14.0-linux-amd64
+install -m 0755 switchyard-0.14.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -279,6 +279,31 @@ only where switchyard has a Role already (a namespace with a box or a backup set
 Stop leaves them running, and the card says so. The installer creates the ClusterRole; an
 installation from before 0.11.0 gets it from the **Enable** button on the page, with the admin
 context once.
+
+## Offline and power-on
+
+Before it calls the cluster, switchyard checks that the API server takes a connection (2 s at
+most, the answer kept for 5 s and shared by every page), so a cluster whose machine is off
+shows up as **offline** at once instead of after kubectl's own retries, and the pages notice by
+themselves when it answers again.
+
+When the machine can be switched on from here, set a **power-on command** under **Login** (in
+the header; saving it needs the password, since it runs on this machine as switchyard's user).
+While the cluster is offline, every page then offers **Start server**, which runs the command
+with `sh -c`, for a minute at most, with the user and the password given there as
+`$SY_POWER_USER` and `$SY_POWER_PASSWORD`; its output shows under the button and the run leaves
+an `audit` line. The password is kept in `config.json` (0600) as it is, since the command needs
+it; a BMC user that may only log in and switch the power is the right one. For example:
+
+```bash
+# Redfish (HPE iLO, Dell iDRAC, Supermicro, ...): On does nothing when it is on already
+curl -fsSk -u "$SY_POWER_USER:$SY_POWER_PASSWORD" -H 'Content-Type: application/json' \
+  -d '{"ResetType":"On"}' https://bmc.example.org/redfish/v1/Systems/1/Actions/ComputerSystem.Reset/
+# IPMI over LAN
+IPMI_PASSWORD="$SY_POWER_PASSWORD" ipmitool -I lanplus -H bmc.example.org -U "$SY_POWER_USER" -E chassis power on
+# Wake-on-LAN
+wakeonlan 00:11:22:33:44:55
+```
 
 ## Development
 

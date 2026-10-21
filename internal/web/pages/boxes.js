@@ -52,6 +52,8 @@ async function poll() {
     $("sub").textContent = d.Cluster ? "on " + d.Cluster : "";
     $("ver").textContent = "switchyard " + d.Version;
     $("logout").hidden = !d.Login;
+    $("offline").hidden = d.Online;
+    $("cluster").textContent = d.Cluster || "The cluster";
     const html = d.Boxes.length ? d.Boxes.map(boxRow).join("") : `<p class="muted">No box yet. A box is one Deployment: switchyard moves its image from tag to tag.</p>`;
     if (html !== lastHTML) { $("boxes").innerHTML = html; lastHTML = html; }
     $("backups").innerHTML = (d.Backups || []).map(backupRow).join("") || `<p class="muted">No namespace backed up yet. A backup set saves a namespace's databases and volumes as dated archives on a PVC.</p>`;

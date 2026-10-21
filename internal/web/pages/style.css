@@ -55,6 +55,7 @@ pre { margin: 0; padding: 10px; background: var(--log); border-radius: 6px; max-
 .danger { border: 2px solid var(--stop); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
 .danger strong { color: var(--stop); }
 .offline { text-align: center; padding: 48px 16px; }
+.offline pre, .offline .err { text-align: left; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--off); margin-right: 6px; }
 .dot.on { background: var(--ok); }
 .dot.busy { background: var(--warn); }

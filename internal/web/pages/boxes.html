@@ -12,6 +12,12 @@
   <h1><img src="logo.svg" alt=""> switchyard <small id="sub"></small>
     <span class="right"><a class="plain" href="running">Running</a><a class="plain" href="password">Login</a><form id="logout" method="post" action="logout" hidden><button class="plain">Log out</button></form></span></h1>
 
+  <div id="offline" class="card offline" hidden>
+    <h1 class="center"><span><span class="dot"></span><span id="cluster">The cluster</span> is offline</span></h1>
+    <p class="muted">Switched off, or still booting. This page notices when it is back.</p>
+    <div id="power"></div>
+  </div>
+
   <div class="card">
     <h2>Boxes</h2>
     <div id="boxes"><span class="muted">Loading...</span></div>
@@ -74,5 +80,6 @@
   <p class="muted" id="ver"></p>
 </main>
 <script src="boxes.js"></script>
+<script src="power.js"></script>
 </body>
 </html>
