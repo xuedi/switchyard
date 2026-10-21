@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.16.1-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.16.2-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -82,8 +82,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.16.1/switchyard-0.16.1-linux-amd64
-install -m 0755 switchyard-0.16.1-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.16.2/switchyard-0.16.2-linux-amd64
+install -m 0755 switchyard-0.16.2-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -143,7 +143,7 @@ headers count.
 |---|---|
 | Container | which one, when the pod has several |
 | Followers | CronJobs and Deployments in the namespace that run the same image |
-| Pending-SQL command | prints the SQL of the pending migrations, nothing when none; run in the new image before anything moves |
+| Pending-SQL command | prints the SQL of the pending migrations, nothing when none; run in the new image before anything moves, once more when it fails (it only reads) |
 | Migrate command | runs the migrations; in the new image, after the check, before any traffic |
 | Cache command | runs after every switch, forward and back |
 | Site | e.g. `https://shop.example.org`: its host goes as `Host`, its scheme as `X-Forwarded-Proto` with every probe, and it is linked |
@@ -221,13 +221,17 @@ timestamp per run, in the set's time zone; a run without a manifest is incomplet
   image (its dump tool matches the server), a `tar` per volume, a copy and a `tar` per bucket,
   an after-hook, then the manifest,
   the retention and a listing of the target, which switchyard reads from the Job's log. A failed
-  step does not skip the after-hook; the run then fails without a manifest.
+  step does not skip the after-hook; the run then fails and removes its own files, so no
+  half archive is left that nothing would ever prune.
+- **Waiting for the database:** every dump, and every restore before it drops the database,
+  waits for it to answer (2 minutes, 10 for a scheduled run), and a bucket copy is tried again
+  (2 minutes, 10 for a scheduled run): a new pod's first connection can be refused while the
+  cluster's network policy catches up with it. When the database answers, nothing waits.
 - **Schedule:** a CronJob `switchyard-backup` made from the set, so backups run without
   switchyard; always hot (`--single-transaction`, `pg_dump`). **Cold** scales the namespace's
   workloads (not its databases and stores) to 0 for the backups started on the page. A host backup can
   skip namespaces by that name, so it stays as it is. A slot missed while the cluster was off
-  still runs when it is back, up to a day late, once; its dumps wait up to 10 minutes for the
-  databases and its bucket copies are tried for 10 minutes.
+  still runs when it is back, up to a day late, once.
 - **A schedule that stops** shows in red on the start page and the backups page: the CronJob
   suspended (with a button to resume it), the last scheduled run failed, or a slot passed more
   than an hour ago without a run. The newest archive shows its age.

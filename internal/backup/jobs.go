@@ -204,33 +204,42 @@ const startScript = `mkdir -p /sy/failed; date +%s > /sy/start
 while :; do TS=$(date +%Y-%m-%d_%H-%M); ls /target/"$TS"_* >/dev/null 2>&1 || break; echo "$TS is taken, waiting"; sleep 10; done
 echo "$TS" > /sy/ts; echo "run $TS"`
 
+// waitDB waits for the database at $SVC, as user, every 10 s, tries times at most: a new pod's
+// first connection can be refused while the cluster's firewall catches up with it, and a
+// scheduled run may catch up right after a boot. It answers at once when the database does.
+func waitDB(it config.Item, user, db string, tries int) string {
+	ready := `command -v pg_isready >/dev/null || return 0; pg_isready -q -h "$SVC" -U ` + sq(user) + ` -d ` + sq(db)
+	if it.Kind == "mariadb" {
+		ready = `a=$(command -v mariadb-admin || command -v mysqladmin) || return 0; "$a" ping --silent -h "$SVC" -u ` + sq(user) + ` >/dev/null 2>&1`
+	}
+	return `ready() { ` + ready + `; }
+i=0; until ready || [ $i -ge ` + fmt.Sprint(tries) + ` ]; do [ $i = 0 ] && echo "` + it.Name + `: waiting for $SVC"; i=$((i+1)); sleep 10; done
+`
+}
+
 // dumpStep dumps a database in its own image, through zstd into the target, or into /work when
-// the image has no zstd (the last step compresses it). wait: up to 10 minutes for the database
-// first (a scheduled run that catches up after a boot).
-func dumpStep(it config.Item, image string, wait bool) step {
+// the image has no zstd (the last step compresses it), after waiting for it: 10 minutes for a
+// scheduled run, 2 otherwise.
+func dumpStep(it config.Item, image string, scheduled bool) step {
 	n, f := it.Name, `/target/"$TS"_`+it.Name+`.sql.zst`
 	fail := `touch /sy/failed/` + n
-	var dump, ready string
+	var dump string
 	env := []any{map[string]any{"name": "SVC", "value": it.Service}, map[string]any{"name": "DB", "value": it.Database},
 		map[string]any{"name": "DBUSER", "value": it.User}}
 	switch it.Kind {
 	case "mariadb":
 		dump = `"$(command -v mariadb-dump || command -v mysqldump)" --single-transaction -h "$SVC" -u "$DBUSER" "$DB"`
-		ready = `a=$(command -v mariadb-admin || command -v mysqladmin) || return 0; "$a" ping --silent -h "$SVC" -u "$DBUSER" >/dev/null 2>&1`
 		env = append(env, secretEnv("MYSQL_PWD", it.Secret, it.PasswordKey))
 	default:
 		dump = `pg_dump -h "$SVC" -U "$DBUSER" -d "$DB"`
-		ready = `command -v pg_isready >/dev/null || return 0; pg_isready -q -h "$SVC" -U "$DBUSER" -d "$DB"`
 		env = append(env, secretEnv("PGPASSWORD", it.Secret, it.PasswordKey))
 	}
-	script := `TS=$(cat /sy/ts)
-`
-	if wait {
-		script += `ready() { ` + ready + `; }
-i=0; until ready || [ $i -ge 60 ]; do [ $i = 0 ] && echo "` + n + `: waiting for $SVC"; i=$((i+1)); sleep 10; done
-`
+	tries := 12
+	if scheduled {
+		tries = 60
 	}
-	script += `if command -v zstd >/dev/null; then
+	script := `TS=$(cat /sy/ts)
+` + waitDB(it, it.User, it.Database, tries) + `if command -v zstd >/dev/null; then
   { ` + dump + ` || ` + fail + `; } | zstd -q > ` + f + `.part || ` + fail + `
   if [ -e /sy/failed/` + n + ` ]; then rm -f ` + f + `.part; echo "` + n + ` failed"; else mv ` + f + `.part ` + f + `; echo "` + n + ` $(wc -c < ` + f + `) bytes"; fi
 else
@@ -286,7 +295,8 @@ END {
 }' | while read ts; do echo "pruned $ts"; rm -f -- "$ts"_*; done`
 
 // lastStep compresses what waits in /work, then, if nothing failed, writes the manifest and
-// prunes; prints the index either way, then the run's line.
+// prunes, else removes the run's own files (nothing would ever prune them); prints the index
+// either way, then the run's line.
 func lastStep(b config.Backup, c cluster, kind string) step {
 	var names []string
 	for _, it := range b.Items {
@@ -310,6 +320,7 @@ if [ -z "$(ls /sy/failed)" ]; then
   ok=ok
 else
   ok=failed; echo "failed: $(ls /sy/failed | tr '\n' ' ')"
+  rm -f -- "$TS"_* && echo "removed the files of $TS: a failed run is no archive"
 fi
 ` + indexScript + `
 echo ` + runLine + ` "$TS" $ok
@@ -340,15 +351,16 @@ func s3Dir(it config.Item) string { return sq("/work/s3/" + it.Name) }
 // bucketSteps copies the bucket into /work (the S3 image), then tars the copy into the target
 // (the tools image): the object keys are the paths in the tar. wait: the copy is tried for 10
 // minutes.
-func bucketSteps(it config.Item, c cluster, wait bool) []step {
+func bucketSteps(it config.Item, c cluster, scheduled bool) []step {
 	d, f := s3Dir(it), `/target/"$TS"_`+it.Name+`.tar.zst`
 	fail := `touch /sy/failed/` + it.Name
-	copyScript := `mkdir -p ` + d + ` && rclone copy -q --retries 1 sy:"$BUCKET" ` + d + ` || { ` + fail + `; echo "` + it.Name + `: the copy of $BUCKET failed"; }`
-	if wait {
-		copyScript = `mkdir -p ` + d + `; i=0; until rclone copy -q --retries 1 sy:"$BUCKET" ` + d + `; do i=$((i+1))
-  [ $i -ge 30 ] && { ` + fail + `; echo "` + it.Name + `: the copy of $BUCKET failed"; break; }
-  echo "` + it.Name + `: the copy of $BUCKET failed, again in 20 s"; sleep 20; done`
+	tries := 6
+	if scheduled {
+		tries = 30
 	}
+	copyScript := `mkdir -p ` + d + `; i=0; until rclone copy -q --retries 1 sy:"$BUCKET" ` + d + `; do i=$((i+1))
+  [ $i -ge ` + fmt.Sprint(tries) + ` ] && { ` + fail + `; echo "` + it.Name + `: the copy of $BUCKET failed"; break; }
+  echo "` + it.Name + `: the copy of $BUCKET failed, again in 20 s"; sleep 20; done`
 	tarScript := `TS=$(cat /sy/ts)
 if [ -e /sy/failed/` + it.Name + ` ]; then rm -rf ` + d + `; echo "` + it.Name + ` failed"; exit 0; fi
 cd ` + d + ` && n=$(find . -type f | wc -l) && { tar -cpf - . || ` + fail + `; } | zstd -q > ` + f + `.part || ` + fail + `
@@ -432,13 +444,13 @@ func restorePod(b config.Backup, c cluster, picks []Pick, imp bool) map[string]a
 			var script string
 			if it.Kind == "mariadb" {
 				env = append(env, secretEnv("MYSQL_PWD", it.Secret, it.RootKey))
-				script = skip + `C=$(command -v mariadb || command -v mysql)
+				script = skip + waitDB(it, it.RootUserOr(), it.Database, 12) + `C=$(command -v mariadb || command -v mysql)
 "$C" -h "$SVC" -u ` + sq(it.RootUserOr()) + ` -e 'DROP DATABASE IF EXISTS ` + "`" + it.Database + "`" + `; CREATE DATABASE ` + "`" + it.Database + "`" + `;' &&
 "$C" -h "$SVC" -u ` + sq(it.RootUserOr()) + ` ` + sq(it.Database) + ` < /work/` + it.Name + `.sql && echo "` + it.Name + ` restored" || ` + fail
 			} else {
 				env = append(env, secretEnv("PGPASSWORD", it.Secret, it.RootKey))
 				psql := `psql -v ON_ERROR_STOP=1 -q -o /dev/null -h "$SVC" -U ` + sq(it.RootUserOr())
-				script = skip + psql + ` -d postgres -c 'DROP DATABASE IF EXISTS "` + it.Database + `" WITH (FORCE)' -c 'CREATE DATABASE "` + it.Database + `" OWNER "` + it.User + `"' &&
+				script = skip + waitDB(it, it.RootUserOr(), "postgres", 12) + psql + ` -d postgres -c 'DROP DATABASE IF EXISTS "` + it.Database + `" WITH (FORCE)' -c 'CREATE DATABASE "` + it.Database + `" OWNER "` + it.User + `"' &&
 ` + psql + ` -d ` + sq(it.Database) + ` -f /work/` + it.Name + `.sql && echo "` + it.Name + ` restored" || ` + fail
 			}
 			steps = append(steps, step{name: "restore-" + it.Name, image: c.images[it.Name], script: script, env: env})

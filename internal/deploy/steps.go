@@ -88,6 +88,13 @@ func (r *Runner) migrations(ctx context.Context, tag string, allow bool) (drops 
 	if b.PendingSQL != "" {
 		cmd := append([]string{"sh", "-c", `"$@" >/tmp/switchyard-pending.sql || exit $?; echo "` + sqlMarker + `"; cat /tmp/switchyard-pending.sql`, "sh"}, strings.Fields(b.PendingSQL)...)
 		out, err := r.job(ctx, "pending-sql", tag, cmd)
+		if err != nil && ctx.Err() == nil {
+			// it only reads: a new pod's first connection may be refused while the cluster's
+			// firewall catches up with it, so once more
+			r.tail(out, 5)
+			r.logf("the pending-SQL check failed, once more")
+			out, err = r.job(ctx, "pending-sql", tag, cmd)
+		}
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
