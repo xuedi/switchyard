@@ -7,7 +7,10 @@
 * { box-sizing: border-box; }
 body { margin: 0; padding: 16px; background: var(--bg); color: var(--text);
        font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-main { max-width: 900px; margin: 0 auto; }
+main { margin: 0 auto; }
+@media (min-width: 1024px) { main { max-width: 960px; } }
+@media (min-width: 1216px) { main { max-width: 1152px; } }
+@media (min-width: 1408px) { main { max-width: 1344px; } }
 h1 { font-size: 20px; margin: 0 0 12px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 h1 img { width: 26px; height: 26px; }
 h1 small { font-weight: normal; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -81,12 +84,79 @@ details summary { cursor: pointer; color: var(--btn); margin: 12px 0 4px; }
 .gap-t { margin-top: 14px; } .gap-b { margin-bottom: 10px; } .gap-b0 { margin: 0 0 10px; }
 .card.item { margin: 6px 0; padding: 8px 12px; }
 select.auto { width: auto; }
-.nshead { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; margin-bottom: 6px; }
+.r { text-align: right; }
+button.small { padding: 4px 12px; min-width: 0; font-size: 13px; }
+.card.ns { padding: 10px 16px; margin-bottom: 8px; }
+.nshead { display: grid; grid-template-columns: 24% 84px 1fr auto; align-items: center;
+          min-height: 36px; cursor: pointer; user-select: none; }
+.nshead > span { padding: 0 8px; }
+.ns.open .nshead { padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.chev { color: var(--muted); font-size: 12px; display: inline-block; width: 16px; margin-left: -4px; }
 .nsname { font-weight: 600; font-size: 16px; }
-.nsact { margin-left: auto; }
+.nsact { justify-content: flex-end; }
 .nsact input { width: 160px; padding: 5px 8px; }
+.busy { margin-top: 6px; }
 .st-running { color: var(--ok); } .st-starting, .st-stopping, .st-partly { color: var(--warn); } .st-stopped { color: var(--off); }
-table.wl td { border-bottom: 0; padding: 7px 6px 3px; vertical-align: baseline; }
-table.wl tr.w td { border-top: 1px solid var(--line); }
-table.wl tr.w:first-child td { border-top: 0; }
-table.wl tr.pod td { padding: 0 6px 4px 18px; font-size: 13px; }
+table.wl { font-size: 14px; margin-top: 4px; table-layout: fixed; }
+table.wl td { overflow-wrap: break-word; }
+table.wl th { white-space: nowrap; }
+col.c-name { width: 24%; } col.c-ready { width: 84px; } col.c-restarts { width: 84px; }
+col.c-age { width: 70px; } col.c-cpu { width: 56px; } col.c-mem { width: 80px; } col.c-act { width: 76px; }
+table.wl th { padding: 8px 8px 4px; }
+table.wl td { padding: 6px 8px; border-bottom: 0; vertical-align: middle; }
+table.wl tbody tr.w td { border-top: 1px solid var(--line); }
+table.wl tbody tr.w:first-child td { border-top: 0; }
+table.wl tr.pod td { padding-top: 2px; padding-bottom: 4px; font-size: 13px; }
+table.wl tr.pod td:first-child { padding-left: 22px; }
+table.wl td.act { width: 1%; }
+table.wl code { font-size: 12.5px; word-break: normal; }
+code.addr { display: block; margin-top: 2px; }
+table.cron { margin-top: 14px; }
+table.cron tbody tr td { border-top: 1px solid var(--line); }
+table.cron tbody tr:first-child td { border-top: 0; }
+.ns details { margin-top: 6px; }
+
+/* phones: no tables on Running, a tile per namespace */
+.tilehead { display: grid; grid-template-columns: auto 1fr auto auto; gap: 2px 8px; align-items: center; cursor: pointer; user-select: none; }
+.tilehead .dot { margin: 0; }
+.tilehead .sub { grid-column: 2 / -1; font-size: 13px; color: var(--muted); }
+ul.wlist { list-style: none; margin: 10px 0 0; padding: 0; }
+ul.wlist li { padding: 9px 0; border-top: 1px solid var(--line); font-size: 14px; }
+ul.wlist li .muted { margin-top: 2px; }
+.wrow { display: flex; align-items: center; gap: 8px; }
+.wrow strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pods { display: inline-flex; flex-wrap: wrap; gap: 3px; max-width: 90px; justify-content: flex-end; }
+.pd { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--ok); }
+.pd.wait { background: var(--warn); } .pd.bad { background: var(--stop); }
+.cronline { font-size: 13px; padding: 9px 0 0; border-top: 1px solid var(--line); }
+.tabbar { display: none; }
+
+/* phones: no tables, a tab bar at the bottom, bigger targets */
+@media (max-width: 640px) {
+  body { padding: 10px 10px calc(72px + env(safe-area-inset-bottom)); font-size: 15px; }
+  h1 { font-size: 18px; gap: 6px 10px; }
+  .card { padding: 12px; border-radius: 12px; margin-bottom: 10px; }
+  button { min-height: 40px; }
+  button.small, button.plain, td.act button { min-height: 34px; }
+  pre { max-height: 320px; white-space: pre; word-break: normal; overflow-x: auto; font-size: 11px; }
+  .wide { display: none; }
+  .tabbar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--card);
+            border-top: 1px solid var(--line); padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); }
+  .tabbar a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px;
+              color: var(--muted); text-decoration: none; }
+  .tabbar a.on { color: var(--btn); font-weight: 600; }
+  .tabbar svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .box { flex-direction: column; align-items: stretch; gap: 4px; }
+  .box .name { min-width: 0; }
+  .box code { word-break: normal; overflow-wrap: anywhere; }
+  table.cards thead { display: none; }
+  table.cards, table.cards tbody { display: block; }
+  table.cards tr { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+  table.cards tr:last-child { border-bottom: 0; }
+  table.cards td { display: block; padding: 0; border: 0; grid-column: 1 / -1; font-size: 14px; }
+  table.cards td:first-child { grid-column: 1; }
+  table.cards td.act { grid-column: 2; grid-row: 1; text-align: right; }
+  table.cards td:empty, table.cards td.hide-s { display: none; }
+  table.cards.runs td:nth-child(2) { grid-column: 2; grid-row: 1; text-align: right; }
+  .grid { grid-template-columns: 1fr; }
+}

@@ -11,8 +11,15 @@ const DOT = {running: "on", starting: "busy", stopping: "busy", partly: "busy", 
 
 let last = null, lastHTML = "", clickErr = "", armed = "", armTimer = 0, typed = "", paused = false;
 const openLogs = new Set();
+const phone = matchMedia("(max-width: 640px)");
+let open = new Set();
+try { open = new Set(JSON.parse(localStorage.getItem("sy-running-open") || "[]")); } catch (e) { /* none open */ }
+const saveOpen = () => { try { localStorage.setItem("sy-running-open", JSON.stringify([...open])); } catch (e) { /* kept in memory */ } };
 
+const cpuN = m => m < 1000 ? m + "m" : (m / 1000).toFixed(1);
 function usage(v, o) { return v.Metrics && (o.CPU || o.Mem) ? `${cpu(o.CPU)} · ${mem(o.Mem)}` : ""; }
+const wbr = t => esc(t).replace(/:/g, ":<wbr>");
+const plural = (k, one, more) => k + " " + (k === 1 ? one : more);
 
 function nsButtons(n) {
   const dis = n.Busy ? " disabled" : "";
@@ -27,51 +34,133 @@ function nsButtons(n) {
   return b + `<button class="stop${armed === key ? " confirm" : ""}" data-click="stop" data-n="${esc(n.Name)}"${dis}>${armed === key ? "Click again" : "Stop"}</button>`;
 }
 
-function workloadRow(v, n, w) {
+function wlButton(n, w) {
   const dis = n.Busy ? " disabled" : "";
   const key = "stop:" + n.Name + ":" + w.Obj;
-  let act = "";
-  if (!w.Canary && w.Replicas > 0) act = `<button class="stop${armed === key ? " confirm" : ""}" data-click="stop" data-n="${esc(n.Name)}" data-w="${esc(w.Obj)}"${dis}>${armed === key ? "Click again" : "Stop"}</button>`;
-  if (!w.Canary && w.Replicas === 0) act = `<button data-click="start" data-n="${esc(n.Name)}" data-w="${esc(w.Obj)}"${dis}>Start</button>`;
-  const back = w.Replicas === 0 && w.Saved ? ` <span class="muted">(Start: ${w.Saved})</span>` : "";
-  const addr = (w.Addresses || []).map(a => `<code>${esc(a)}</code>`).join(" ");
-  let html = `<tr class="w"><td><strong>${esc(w.Name)}</strong> <span class="badge">${esc(w.Kind)}</span>${w.Canary ? ` <span class="badge canary">canary</span>` : ""}</td>
-    <td class="num"><span class="st-${esc(w.State)}">${esc(w.State)}</span> ${w.Ready}/${w.Replicas}${back}</td>
-    <td>${w.Image ? `<code class="muted">${esc(w.Image)}</code>` : ""} ${addr}</td>
-    <td class="num hide-s muted">${usage(v, w)}</td>
-    <td class="act">${act}</td></tr>`;
-  for (const p of w.Pods || []) {
-    const st = p.Waiting ? `<span class="failed">${esc(p.Waiting)}</span>` : p.Ready ? `<span class="ok">ready</span>` : `<span class="running">${esc(p.Phase.toLowerCase())}</span>`;
-    const cs = (p.Containers || []).map(c => `${c.Ready ? "&#10003;" : "&#10007;"} ${esc(c.Name)}${c.Restarts ? ` (${c.Restarts} restarts)` : ""}`).join(", ");
-    html += `<tr class="pod"><td colspan="5"><span class="muted">${esc(p.Name)}</span> ${st}
-      <span class="muted">· ${p.Restarts} restarts · ${esc(age(p.Started))}${w.Pods.length > 1 && usage(v, p) ? " · " + usage(v, p) : ""}${cs ? " · " + cs : ""}</span></td></tr>`;
+  if (w.Canary) return "";
+  if (w.Replicas > 0) return `<button class="stop small${armed === key ? " confirm" : ""}" data-click="stop" data-n="${esc(n.Name)}" data-w="${esc(w.Obj)}"${dis}>${armed === key ? "Click again" : "Stop"}</button>`;
+  return `<button class="small" data-click="start" data-n="${esc(n.Name)}" data-w="${esc(w.Obj)}" title="back to ${w.Saved || 1} ${w.Saved > 1 ? "replicas" : "replica"}"${dis}>Start</button>`;
+}
+
+// ready is the count with its dot; the state in words only on the way up or down.
+function ready(o, quiet) {
+  const word = o.State && o.State !== "running" && !(quiet && o.State === "stopped") ? ` <span class="st-${esc(o.State)}">${esc(o.State)}</span>` : "";
+  return `<span class="dot ${DOT[o.State] || ""}"></span>${o.Ready}/${o.Replicas}${word}`;
+}
+
+function podState(p) {
+  return p.Waiting ? `<span class="failed">${esc(p.Waiting)}</span>` : p.Ready ? `<span class="pd ok" title="ready"></span>` : `<span class="running">${esc(p.Phase.toLowerCase())}</span>`;
+}
+
+const containers = p => (p.Containers || []).map(c => `<span class="${c.Ready ? "ok" : "failed"}">${c.Ready ? "&#10003;" : "&#10007;"}</span> ${esc(c.Name)}${c.Restarts ? ` <span class="muted">(${c.Restarts})</span>` : ""}`).join(" ");
+
+// A workload with one plain pod is one row: the pod's restarts and age go on it.
+function wlRows(v, n, w) {
+  const pods = w.Pods || [];
+  const merged = pods.length === 1 && !(pods[0].Containers || []).length ? pods[0] : null;
+  const restarts = pods.reduce((t, p) => t + p.Restarts, 0);
+  const metrics = o => v.Metrics ? `<td class="r num">${o.CPU || o.Mem ? cpuN(o.CPU) : ""}</td><td class="r num">${o.CPU || o.Mem ? mem(o.Mem) : ""}</td>` : "";
+  let html = `<tr class="w">
+    <td><strong title="${esc(w.Kind)}${merged ? ", pod " + esc(merged.Name) : ""}">${esc(w.Name)}</strong>${w.Canary ? ` <span class="badge canary">canary</span>` : ""}</td>
+    <td class="num">${ready(w, true)}${merged && merged.Waiting ? ` <span class="failed">${esc(merged.Waiting)}</span>` : ""}</td>
+    <td>${w.Image ? `<code>${wbr(w.Image)}</code>` : ""}${(w.Addresses || []).map(a => `<code class="addr muted">&#8594; ${wbr(a)}</code>`).join("")}</td>
+    <td class="r num ${restarts ? "running" : "muted"}">${pods.length ? restarts : ""}</td>
+    <td class="r num">${merged ? esc(age(merged.Started)) : ""}</td>
+    ${metrics(w)}
+    <td class="act">${wlButton(n, w)}</td></tr>`;
+  if (merged) return html;
+  for (const p of pods) {
+    html += `<tr class="pod">
+      <td><span class="muted">${esc(p.Name)}</span></td>
+      <td>${podState(p)}</td>
+      <td>${containers(p)}</td>
+      <td class="r num ${p.Restarts ? "running" : "muted"}">${p.Restarts}</td>
+      <td class="r num">${esc(age(p.Started))}</td>
+      ${metrics(p)}<td></td></tr>`;
   }
   return html;
 }
 
-function nsCard(v, n) {
-  const parts = [`${n.Ready}/${n.Replicas} ready`];
-  if (usage(v, n)) parts.push(usage(v, n));
-  const crons = (n.CronJobs || []).map(c => `<div class="muted">CronJob <strong>${esc(c.Name)}</strong> <code>${esc(c.Schedule)}</code>
-    ${c.Suspend ? `· <span class="running">suspended${c.Held ? " by Stop, Start resumes it" : ""}</span>` : ""}
-    ${c.Active ? `· ${c.Active} running` : ""}${c.Last ? ` · last ${esc(age(c.Last))} ago` : ""}
-    ${!c.Suspend && !n.Role ? `· <span title="switchyard has no Role here">Stop leaves it running</span>` : ""}</div>`).join("");
+function cronRows(v, n) {
+  return (n.CronJobs || []).map(c => `<tr>
+    <td><strong>${esc(c.Name)}</strong></td>
+    <td colspan="2"><code>${esc(c.Schedule)}</code> &nbsp;${c.Suspend ? `<span class="running">suspended${c.Held ? " by Stop, Start resumes it" : ""}</span>` : !n.Role ? `<span title="switchyard has no Role here">Stop leaves it running</span>` : `<span class="muted">scheduled</span>`}${c.Active ? ` · <span class="running">${c.Active} running</span>` : ""}</td>
+    <td colspan="2" class="r num">${c.Last ? esc(age(c.Last)) + " ago" : ""}</td>
+    ${v.Metrics ? "<td></td><td></td>" : ""}<td></td></tr>`).join("");
+}
+
+function runLog(n) {
   const r = n.Run;
-  const run = r ? `<details data-log="${esc(n.Name)}"${openLogs.has(n.Name) ? " open" : ""}>
+  return r ? `<details data-log="${esc(n.Name)}"${openLogs.has(n.Name) ? " open" : ""}>
     <summary>Last ${esc(r.Kind)}${r.Target ? " of " + esc(r.Target) : ""}: <span class="${esc(r.Status)}">${esc(r.Status)}</span>
     <span class="muted">· ${esc(took(r.Started, r.Finished))} · by ${esc(r.By)}${r.Message && r.Status === "failed" ? " · " + esc(r.Message) : ""}</span></summary>
     <pre>${esc((r.Log || []).join("\n"))}</pre></details>` : "";
-  return `<div class="card">
-    <div class="nshead">
-      <span class="nsname"><span class="dot ${DOT[n.State] || ""}"></span>${esc(n.Name)}</span>
-      <span class="status st-${esc(n.State)}">${esc(n.State)}</span>
-      <span class="muted num">${parts.join(" · ")}</span>
+}
+
+function summary(n) {
+  const parts = [plural((n.Workloads || []).length, "workload", "workloads")];
+  if ((n.CronJobs || []).length) parts.push(plural(n.CronJobs.length, "CronJob", "CronJobs"));
+  if (n.Run && n.Run.Status !== "ok") parts.push(`last ${esc(n.Run.Kind)} <span class="${esc(n.Run.Status)}">${esc(n.Run.Status)}</span>`);
+  return parts.join(" · ");
+}
+
+function nsCard(v, n) {
+  const isOpen = open.has(n.Name);
+  const head = `<div class="nshead" data-ns="${esc(n.Name)}">
+      <span class="nsname"><span class="chev" aria-hidden="true">${isOpen ? "&#9662;" : "&#9656;"}</span>${esc(n.Name)}</span>
+      <span class="num"><span class="dot ${DOT[n.State] || ""}"></span>${n.Ready}/${n.Replicas}</span>
+      <span class="muted">${[n.State !== "running" ? `<span class="st-${esc(n.State)}">${esc(n.State)}</span>` : "", usage(v, n), summary(n)].filter(Boolean).join(" · ")}</span>
       <span class="buttons nsact">${nsButtons(n)}</span>
     </div>
-    ${n.Busy ? `<div class="muted running">${esc(n.Busy)} is running</div>` : ""}
-    <table class="wl">${(n.Workloads || []).map(w => workloadRow(v, n, w)).join("")}</table>
-    ${crons}${run}
+    ${n.Busy ? `<div class="muted running busy">${esc(n.Busy)} is running</div>` : ""}`;
+  if (!isOpen) return `<div class="card ns">${head}</div>`;
+  const m = v.Metrics ? `<th class="r">CPU</th><th class="r">Memory</th>` : "";
+  const cols = `<colgroup><col class="c-name"><col class="c-ready"><col class="c-image"><col class="c-restarts"><col class="c-age">${v.Metrics ? `<col class="c-cpu"><col class="c-mem">` : ""}<col class="c-act"></colgroup>`;
+  const crons = (n.CronJobs || []).length ? `<table class="wl cron">${cols}
+      <thead><tr><th>CronJob</th><th colspan="2">Schedule</th><th colspan="2" class="r">Last run</th>${v.Metrics ? "<th></th><th></th>" : ""}<th></th></tr></thead>
+      <tbody>${cronRows(v, n)}</tbody></table>` : "";
+  return `<div class="card ns open">${head}
+    <table class="wl">${cols}
+      <thead><tr><th>Workload</th><th>Ready</th><th>Image</th><th class="r">Restarts</th><th class="r">Age</th>${m}<th></th></tr></thead>
+      <tbody>${(n.Workloads || []).map(w => wlRows(v, n, w)).join("")}</tbody>
+    </table>
+    ${crons}${runLog(n)}
   </div>`;
+}
+
+// The phone: a tile per namespace, the workloads as a list, a dot per pod.
+function podDots(w) {
+  return (w.Pods || []).map(p => `<span class="pd ${p.Waiting ? "bad" : p.Ready ? "ok" : "wait"}" title="${esc(p.Name)}${p.Restarts ? " · " + p.Restarts + " restarts" : ""}"></span>`).join("");
+}
+
+function nsTile(v, n) {
+  const isOpen = open.has(n.Name);
+  let html = `<div class="card ns tile${isOpen ? " open" : ""}">
+    <div class="tilehead" data-ns="${esc(n.Name)}">
+      <span class="dot ${DOT[n.State] || ""}"></span>
+      <span class="nsname">${esc(n.Name)}</span>
+      <span class="chev" aria-hidden="true">${isOpen ? "&#9662;" : "&#9656;"}</span>
+      <span class="buttons nsact">${nsButtons(n)}</span>
+      <span class="sub">${n.Ready}/${n.Replicas} ready${n.State !== "running" ? ` · <span class="st-${esc(n.State)}">${esc(n.State)}</span>` : ""}${usage(v, n) ? " · " + usage(v, n) : ""}</span>
+    </div>
+    ${n.Busy ? `<div class="muted running busy">${esc(n.Busy)} is running</div>` : ""}`;
+  if (!isOpen) return html + `</div>`;
+  html += `<ul class="wlist">` + (n.Workloads || []).map(w => {
+    const waiting = (w.Pods || []).filter(p => p.Waiting).map(p => `<div class="failed">${esc(p.Waiting)}</div>`).join("");
+    const restarts = (w.Pods || []).reduce((t, p) => t + p.Restarts, 0);
+    const info = [w.Image ? `<code>${esc(w.Image)}</code>` : esc(w.Kind)];
+    if (usage(v, w)) info.push(usage(v, w));
+    if (restarts) info.push(`<span class="running">${plural(restarts, "restart", "restarts")}</span>`);
+    return `<li>
+      <div class="wrow"><strong>${esc(w.Name)}</strong>${w.Canary ? ` <span class="badge canary">canary</span>` : ""}
+        <span class="pods">${podDots(w)}</span><span class="num">${w.Ready}/${w.Replicas}</span>${wlButton(n, w)}</div>
+      <div class="muted">${info.join(" · ")}</div>
+      ${(w.Addresses || []).length ? `<div class="muted">${w.Addresses.map(a => `<code>${esc(a)}</code>`).join(" ")}</div>` : ""}
+      ${waiting}</li>`;
+  }).join("") + `</ul>`;
+  html += (n.CronJobs || []).map(c => `<div class="cronline"><span class="muted">CronJob</span> <strong>${esc(c.Name)}</strong> <code>${esc(c.Schedule)}</code>
+    <span class="muted">${c.Suspend ? `· <span class="running">suspended</span>` : ""}${c.Active ? ` · ${c.Active} running` : ""}${c.Last ? ` · last ${esc(age(c.Last))} ago` : ""}</span></div>`).join("");
+  return html + runLog(n) + `</div>`;
 }
 
 function render(v) {
@@ -82,7 +171,11 @@ function render(v) {
   const err = clickErr || v.Error || "";
   $("err").textContent = err; $("err").hidden = !err;
   $("enable").hidden = v.Enabled;
-  const html = (v.Namespaces || []).map(n => nsCard(v, n)).join("") ||
+  const names = (v.Namespaces || []).map(n => n.Name);
+  $("all").hidden = !names.length;
+  $("all").textContent = names.length && names.every(n => open.has(n)) ? "Collapse all" : "Expand all";
+  const card = phone.matches ? nsTile : nsCard;
+  const html = (v.Namespaces || []).map(n => card(v, n)).join("") ||
     (v.Enabled ? `<div class="card muted">No workloads outside the cluster's own namespaces.</div>` : "");
   if (html === lastHTML) return;
   const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.typed : undefined;
@@ -128,6 +221,12 @@ async function send(kind, n, w) {
 $("list").addEventListener("click", e => {
   if (e.target.closest("[data-cancel]")) { armed = ""; typed = ""; rerender(); return; }
   const b = e.target.closest("button[data-click]");
+  const head = e.target.closest("[data-ns]");
+  if (!b && head && !e.target.closest("input, a")) {
+    const n = head.dataset.ns;
+    if (open.has(n)) open.delete(n); else open.add(n);
+    saveOpen(); rerender(); return;
+  }
   if (!b || b.disabled) return;
   const kind = b.dataset.click, n = b.dataset.n, w = b.dataset.w || "";
   if (kind === "start") return send(kind, n, w);
@@ -150,6 +249,12 @@ $("list").addEventListener("toggle", e => {
   if (!d) return;
   if (d.open) openLogs.add(d.dataset.log); else openLogs.delete(d.dataset.log);
 }, true);
+$("all").addEventListener("click", () => {
+  const names = ((last && last.Namespaces) || []).map(n => n.Name);
+  open = names.every(n => open.has(n)) ? new Set() : new Set(names);
+  saveOpen(); rerender();
+});
+phone.addEventListener("change", rerender);
 $("enablebtn").addEventListener("click", async () => {
   $("enablebtn").disabled = true; clickErr = "";
   try {
