@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.16.0-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.16.1-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -62,6 +62,10 @@ run, **Abort** while a canary runs, **Back** to the box when it is done. The box
 the console icon next to a tag in **Tags** opens the log of the last run to it. Backups work the
 same way: **Back up now** and **Restore** open the run page, and every run in the list has its log.
 
+The pages show at once what they showed last (kept in the browser, the buttons dimmed) and put
+the cluster's state in when it comes; switchyard reads the cluster in the background only while
+a page is open.
+
 | Button | What happens |
 |---|---|
 | **Canary** | The pending-SQL check and the migrate command in Jobs of the new image. Then `<deployment>-canary` with 1 pod of the new tag next to the live ones, watched for the pause; then as many pods as the live ones (about half the traffic), watched again. Then the Deployment gets the tag (a normal rolling update), the followers too, the copy goes, and the cache command runs. A failure, or **Abort**, deletes the copy; nothing else changed. |
@@ -78,8 +82,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.16.0/switchyard-0.16.0-linux-amd64
-install -m 0755 switchyard-0.16.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.16.1/switchyard-0.16.1-linux-amd64
+install -m 0755 switchyard-0.16.1-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
