@@ -26,8 +26,9 @@ const (
 	Quick    = "quick"
 	Rollback = "rollback"
 
-	trackLabel = "switchyard/track" // only on the canary copy's pods
-	logLines   = 400
+	trackLabel  = "switchyard/track" // only on the canary copy's pods
+	logLines    = 400
+	keepHistory = 10
 )
 
 // Run is one deploy, quick deploy or rollback.
@@ -53,8 +54,33 @@ type Deployed struct {
 }
 
 type State struct {
-	Deployed []Deployed     `json:"deployed"` // newest deploy first
-	Runs     map[string]Run `json:"runs"`     // the last one of each kind
+	Deployed []Deployed     `json:"deployed"`          // newest deploy first
+	Runs     map[string]Run `json:"runs"`              // the last one of each kind, the running one with its log
+	History  []Run          `json:"history,omitempty"` // the finished runs with their logs, newest first
+}
+
+// remember puts a finished run at the top of the history; the last of its kind keeps no log.
+func (st *State) remember(run Run) {
+	st.History = slices.DeleteFunc(st.History, func(x Run) bool { return x.Started == run.Started })
+	st.History = append([]Run{run}, st.History...)
+	if len(st.History) > keepHistory {
+		st.History = st.History[:keepHistory]
+	}
+	run.Log = nil
+	st.Runs[run.Kind] = run
+}
+
+// All is every run the state knows, newest first: the history and the last of each kind from
+// before it.
+func (st State) All() []Run {
+	all := slices.Clone(st.History)
+	for _, r := range st.Runs {
+		if !slices.ContainsFunc(all, func(x Run) bool { return x.Started == r.Started }) {
+			all = append(all, r)
+		}
+	}
+	slices.SortFunc(all, func(a, b Run) int { return strings.Compare(b.Started, a.Started) })
+	return all
 }
 
 // Refused is a click that cannot be done now; nothing was started.
@@ -219,7 +245,7 @@ func (r *Runner) Recover(ctx context.Context) {
 		r.update(ctx, func(st *State) {
 			run.Status, run.Finished = "failed", now()
 			run.Message = "switchyard stopped during step " + run.Step + "; the canary copy was removed, check the Deployment"
-			st.Runs[kind] = run
+			st.remember(run)
 		})
 	}
 }
@@ -465,7 +491,7 @@ func (r *Runner) exec(ctx context.Context) {
 	final, _ := r.Current()
 	b := r.Box()
 	if err := r.update(bg, func(st *State) {
-		st.Runs[final.Kind] = *final
+		st.remember(*final)
 		if final.Status != "ok" {
 			return
 		}

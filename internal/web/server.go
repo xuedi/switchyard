@@ -255,6 +255,7 @@ func (s *Server) routes() http.Handler {
 	privatePage("GET /password", "password.html")
 	privatePage("GET /backups", "backups.html")
 	privatePage("GET /running", "running.html")
+	privatePage("GET /run", "run.html")
 	open("GET /login", func(w http.ResponseWriter, r *http.Request) {
 		if cfg := s.store.Get(); cfg != nil && cfg.NoLogin {
 			redirect(w, "./")
@@ -279,7 +280,7 @@ func (s *Server) routes() http.Handler {
 		cfg := s.store.Get()
 		writeJSON(w, map[string]bool{"Login": !cfg.NoLogin, "Embedded": cfg.Embedded})
 	})
-	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js", "backups.js", "running.js", "power.js", "frame.js"} {
+	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js", "backups.js", "running.js", "power.js", "frame.js", "run.js"} {
 		open("GET /"+f, s.page(f))
 	}
 	open("GET /logo.svg", func(w http.ResponseWriter, r *http.Request) {
@@ -318,6 +319,7 @@ func (s *Server) routes() http.Handler {
 	private("POST /running/start", func(w http.ResponseWriter, r *http.Request) { s.runningClick(w, r, "start") })
 	private("POST /running/stop", func(w http.ResponseWriter, r *http.Request) { s.runningClick(w, r, "stop") })
 	private("POST /running/enable", s.runningEnable)
+	private("GET /run/state", s.runState)
 	private("GET /power", s.powerState)
 	private("POST /power", s.powerSave)
 	private("POST /power/on", s.powerOn)

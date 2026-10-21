@@ -35,7 +35,7 @@ type View struct {
 	Keep      int
 	Pause     int
 	Runs      map[string]deploy.Run // the last of each kind, without the log
-	Run       *deploy.Run           // the running one, or the newest finished, with its log
+	Run       *deploy.Run           // the running one, or the newest finished, without the log
 	Busy      bool
 	Abortable bool
 }
@@ -61,6 +61,7 @@ type Row struct {
 	By, At   string // how and when it went live
 	Back     int    // kept tags between the live one and it, negative when newer
 	Missing  bool   // kept, but gone from the registry
+	Run      string // the start of the newest run to it, for its log
 }
 
 type Meta struct{ Key, Value string }
@@ -146,11 +147,12 @@ func (s *Server) view(id string) any {
 	}
 	if cur, abortable := run.Current(); cur != nil {
 		v.Run, v.Busy, v.Abortable = cur, true, abortable
-		lite := *cur
-		lite.Log = nil
-		v.Runs[cur.Kind] = lite
+		v.Runs[cur.Kind] = *cur
 	} else {
 		v.Run = newest
+	}
+	if v.Run != nil {
+		v.Run.Log = nil
 	}
 
 	images, err := run.Images(ctx, c.Image)
@@ -190,6 +192,7 @@ func rows(ctx context.Context, run *deploy.Runner, image string, images []regist
 		}
 	}
 	liveCreated := byTag[live].Created
+	all := st.All()
 
 	var list []Row
 	for tag, img := range byTag {
@@ -212,6 +215,9 @@ func rows(ctx context.Context, run *deploy.Runner, image string, images []regist
 		sort.Slice(r.Meta, func(i, j int) bool { return r.Meta[i].Key < r.Meta[j].Key })
 		if d, ok := kept[tag]; ok {
 			r.By, r.At, r.Drops = d.By, d.At, d.Drops
+		}
+		if i := slices.IndexFunc(all, func(x deploy.Run) bool { return x.To == tag }); i >= 0 {
+			r.Run = all[i].Started
 		}
 		list = append(list, r)
 	}

@@ -30,7 +30,7 @@ type BackupView struct {
 	Set       config.Backup
 	Archives  []Archive    // newest first
 	Runs      []backup.Run // without their logs
-	Run       *backup.Run  // the running one, or the newest, with its log
+	Run       *backup.Run  // the running one, or the newest, without its log
 	Busy      bool
 	IndexAt   string
 	Size      int64
@@ -143,8 +143,11 @@ func (s *Server) backupView(ns string) any {
 	}
 	if cur := run.Current(); cur != nil {
 		v.Run, v.Busy = cur, true
-	} else if len(st.Runs) > 0 {
-		v.Run = &st.Runs[0]
+	} else if len(v.Runs) > 0 {
+		v.Run = &v.Runs[0]
+	}
+	if v.Run != nil {
+		v.Run.Log = nil
 	}
 	return v
 }

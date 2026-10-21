@@ -31,18 +31,7 @@
       <div class="muted"><code id="repo"></code></div>
     </div>
 
-    <div class="card" id="runcard" hidden>
-      <h2 id="runtitle"></h2>
-      <div class="run">
-        <span class="status" id="status"></span>
-        <span id="what" class="muted"></span>
-        <span id="when" class="muted num"></span>
-      </div>
-      <div class="steps" id="steps"></div>
-      <p id="message" style="margin:0 0 10px"></p>
-      <div class="buttons" id="abortrow" hidden style="margin-bottom:10px"><button id="abort" class="stop">Abort</button><span class="muted">Deletes the canary copy; the live tag keeps everything.</span></div>
-      <pre id="log"></pre>
-    </div>
+    <div class="card running-now" id="busy" hidden></div>
 
     <div class="card blocked" id="blocked" hidden>
       <h2>Stopped before migrating</h2>

@@ -200,11 +200,6 @@ func (r *Runner) update(ctx context.Context, f func(st *State)) error {
 	if len(st.Runs) > keepRuns {
 		st.Runs = st.Runs[:keepRuns]
 	}
-	for i := range st.Runs {
-		if n := len(st.Runs[i].Log); i >= 3 && n > 40 {
-			st.Runs[i].Log = st.Runs[i].Log[n-40:]
-		}
-	}
 	if len(st.Seen) > 30 {
 		st.Seen = st.Seen[len(st.Seen)-30:]
 	}

@@ -13,8 +13,10 @@ const params = new URLSearchParams(location.search);
 const ns = params.get("n") || "";
 const q = "?n=" + encodeURIComponent(ns);
 const NAMES = {manual: "Backup", scheduled: "Scheduled backup", "pre-restore": "Safety backup", restore: "Restore", index: "Listing"};
+const LOG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><polyline points="7,9 10,12 7,15"/><line x1="12" y1="15" x2="17" y2="15"/></svg>`;
+const runURL = r => "run" + q + (r ? "&r=" + encodeURIComponent(r) : "");
 
-let paused = false, last = null, clickErr = "", armed = "", armTimer = 0, lastRows = "", lastLog = "", restoring = null, formOpen = false;
+let paused = false, last = null, clickErr = "", armed = "", armTimer = 0, lastRows = "", restoring = null, formOpen = false;
 
 async function getJSON(url) {
   const r = await fetch(url, {cache: "no-store"});
@@ -56,25 +58,15 @@ function render(v) {
   if (rows !== lastRows) { $("archives").innerHTML = rows; lastRows = rows; }
 
   $("runs").innerHTML = (v.Runs || []).map(r => `<tr><td>${esc(NAMES[r.Kind] || r.Kind)} ${r.TS ? `<code>${esc(r.TS)}</code>` : ""}</td>
-    <td class="${esc(r.Status)}">${esc(r.Status)}</td><td class="num hide-s">${esc(when(r.Started))}</td>
+    <td><span class="${esc(r.Status)}">${esc(r.Status)}</span><a class="logicon" href="${runURL(r.Started)}" title="its log">${LOG}</a></td><td class="num hide-s">${esc(when(r.Started))}</td>
     <td class="num hide-s">${esc(took(r.Started, r.Finished))}</td><td class="muted">${esc(r.By)}</td></tr>`).join("")
     || `<tr><td colspan="5" class="muted">None yet.</td></tr>`;
 
-  const r = v.Run;
-  $("runcard").hidden = !r;
-  if (r) {
-    $("runtitle").textContent = (NAMES[r.Kind] || r.Kind) + (r.TS ? " " + r.TS : "");
-    $("status").textContent = r.Status; $("status").className = "status " + r.Status;
-    $("what").textContent = r.By ? "by " + r.By : "";
-    $("when").textContent = when(r.Started) + " · " + took(r.Started, r.Finished);
-    $("message").textContent = r.Message || "";
-    const log = (r.Log || []).join("\n");
-    if (log !== lastLog) {
-      const el = $("log"), atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 20;
-      el.textContent = log; lastLog = log;
-      if (atEnd) el.scrollTop = el.scrollHeight;
-    }
-  }
+  const r = v.Busy && v.Run;
+  const now = r ? `<span class="status running">${esc(NAMES[r.Kind] || r.Kind)}</span>${r.TS ? ` <code>${esc(r.TS)}</code>` : ""}
+    <span class="muted">· ${esc(took(r.Started))}</span><a class="right" href="${runURL("")}">Show the progress</a>` : "";
+  $("busy").hidden = !now;
+  if ($("busy").dataset.html !== now) { $("busy").innerHTML = now; $("busy").dataset.html = now; }
 }
 
 async function poll() {
@@ -107,7 +99,7 @@ $("now").addEventListener("click", () => {
     return;
   }
   armed = ""; clearTimeout(armTimer);
-  post("backup/run" + q);
+  post("backup/run" + q).then(ok => { if (ok) location.href = runURL(""); });
 });
 $("refresh").addEventListener("click", () => post("backup/refresh" + q));
 $("resume").addEventListener("click", () => post("backup/resume" + q));
@@ -183,7 +175,7 @@ $("rgo").addEventListener("click", async () => {
     body.Items = [...document.querySelectorAll("[data-pick]:checked")].map(x => x.dataset.pick);
   }
   $("rgo").disabled = true;
-  if (await post("backup/restore" + q, body)) { $("restore").hidden = true; restoring = null; return; }
+  if (await post("backup/restore" + q, body)) { location.href = runURL(""); return; }
   renderWarn();
 });
 

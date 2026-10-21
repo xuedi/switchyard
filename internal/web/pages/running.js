@@ -10,7 +10,6 @@ const took = (a, b) => { if (!a) return ""; const s = Math.max(0, Math.round(((b
 const DOT = {running: "on", starting: "busy", stopping: "busy", partly: "busy", stopped: ""};
 
 let last = null, lastHTML = "", clickErr = "", armed = "", armTimer = 0, typed = "", paused = false;
-const openLogs = new Set();
 const phone = matchMedia("(max-width: 640px)");
 let open = new Set();
 try { open = new Set(JSON.parse(localStorage.getItem("sy-running-open") || "[]")); } catch (e) { /* none open */ }
@@ -89,18 +88,16 @@ function cronRows(v, n) {
     ${v.Metrics ? "<td></td><td></td>" : ""}<td></td></tr>`).join("");
 }
 
-function runLog(n) {
+// lastRun links the namespace's last Start or Stop to the run page.
+function lastRun(n) {
   const r = n.Run;
-  return r ? `<details data-log="${esc(n.Name)}"${openLogs.has(n.Name) ? " open" : ""}>
-    <summary>Last ${esc(r.Kind)}${r.Target ? " of " + esc(r.Target) : ""}: <span class="${esc(r.Status)}">${esc(r.Status)}</span>
-    <span class="muted">· ${esc(took(r.Started, r.Finished))} · by ${esc(r.By)}${r.Message && r.Status === "failed" ? " · " + esc(r.Message) : ""}</span></summary>
-    <pre>${esc((r.Log || []).join("\n"))}</pre></details>` : "";
+  return r ? `<a class="lastrun" href="run?s=${encodeURIComponent(n.Name)}" title="${esc(r.Message || "")}">last ${esc(r.Kind)}${r.Target ? " of " + esc(r.Target) : ""}</a> <span class="${esc(r.Status)}">${esc(r.Status)}</span>` : "";
 }
 
 function summary(n) {
   const parts = [plural((n.Workloads || []).length, "workload", "workloads")];
   if ((n.CronJobs || []).length) parts.push(plural(n.CronJobs.length, "CronJob", "CronJobs"));
-  if (n.Run && n.Run.Status !== "ok") parts.push(`last ${esc(n.Run.Kind)} <span class="${esc(n.Run.Status)}">${esc(n.Run.Status)}</span>`);
+  if (n.Run) parts.push(lastRun(n));
   return parts.join(" · ");
 }
 
@@ -124,7 +121,7 @@ function nsCard(v, n) {
       <thead><tr><th>Workload</th><th>Ready</th><th>Image</th><th class="r">Restarts</th><th class="r">Age</th>${m}<th></th></tr></thead>
       <tbody>${(n.Workloads || []).map(w => wlRows(v, n, w)).join("")}</tbody>
     </table>
-    ${crons}${runLog(n)}
+    ${crons}
   </div>`;
 }
 
@@ -160,7 +157,7 @@ function nsTile(v, n) {
   }).join("") + `</ul>`;
   html += (n.CronJobs || []).map(c => `<div class="cronline"><span class="muted">CronJob</span> <strong>${esc(c.Name)}</strong> <code>${esc(c.Schedule)}</code>
     <span class="muted">${c.Suspend ? `· <span class="running">suspended</span>` : ""}${c.Active ? ` · ${c.Active} running` : ""}${c.Last ? ` · last ${esc(age(c.Last))} ago` : ""}</span></div>`).join("");
-  return html + runLog(n) + `</div>`;
+  return html + (n.Run ? `<div class="cronline">${lastRun(n)}</div>` : "") + `</div>`;
 }
 
 function render(v) {
@@ -244,11 +241,6 @@ $("list").addEventListener("input", e => {
 $("list").addEventListener("keydown", e => {
   if (e.target.dataset.typed !== undefined && e.key === "Enter" && typed === e.target.dataset.typed) send("stop", typed, "");
 });
-$("list").addEventListener("toggle", e => {
-  const d = e.target.closest("details[data-log]");
-  if (!d) return;
-  if (d.open) openLogs.add(d.dataset.log); else openLogs.delete(d.dataset.log);
-}, true);
 $("all").addEventListener("click", () => {
   const names = ((last && last.Namespaces) || []).map(n => n.Name);
   open = names.every(n => open.has(n)) ? new Set() : new Set(names);

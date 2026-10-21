@@ -114,7 +114,16 @@ code.addr { display: block; margin-top: 2px; }
 table.cron { margin-top: 14px; }
 table.cron tbody tr td { border-top: 1px solid var(--line); }
 table.cron tbody tr:first-child td { border-top: 0; }
-.ns details { margin-top: 6px; }
+.cardhead { display: flex; align-items: baseline; gap: 12px; }
+.cardhead h2 { flex: 1; text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--text); }
+.cardhead a { font-size: 13px; }
+pre.tall { max-height: 70vh; }
+.running-now { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; }
+.running-now .right { margin-left: auto; font-size: 13px; }
+a.logicon { display: inline-flex; vertical-align: middle; margin-left: 8px; color: var(--muted); }
+a.logicon:hover { color: var(--btn); }
+a.logicon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+a.lastrun { color: inherit; }
 
 /* phones: no tables on Running, a tile per namespace */
 .tilehead { display: grid; grid-template-columns: auto 1fr auto auto; gap: 2px 8px; align-items: center; cursor: pointer; user-select: none; }

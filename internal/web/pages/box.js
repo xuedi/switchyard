@@ -8,25 +8,11 @@ const took = (a, b) => { if (!a) return ""; const s = Math.max(0, Math.round(((b
   return s >= 60 ? Math.floor(s / 60) + " min " + (s % 60) + " s" : s + " s"; };
 const box = new URLSearchParams(location.search).get("b") || "";
 
-const STEPS = {
-  canary: [["migrate", "migrate"], ["one", "1 pod"], ["half", "half"], ["switch", "switch"], ["after", "after"], ["done", "done"]],
-  quick: [["migrate", "migrate"], ["switch", "switch"], ["after", "after"], ["done", "done"]],
-  rollback: [["switch", "switch"], ["after", "after"], ["done", "done"]],
-};
 const NAMES = {canary: "Canary deploy", quick: "Deploy", rollback: "Rollback"};
+const LOG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><polyline points="7,9 10,12 7,15"/><line x1="12" y1="15" x2="17" y2="15"/></svg>`;
+const runURL = r => "run?b=" + encodeURIComponent(box) + (r ? "&r=" + encodeURIComponent(r) : "");
 
-function steps(r, list) {
-  const at = list.findIndex(s => s[0] === r.Step);
-  return list.map(([key, label], i) => {
-    let c = "";
-    if (r.Status === "ok") c = "done";
-    else if (i < at) c = "done";
-    else if (i === at) c = r.Status === "running" ? "now" : "bad";
-    return `<span class="${c}">${esc(label)}</span>`;
-  }).join("");
-}
-
-let paused = false, clickBusy = false, clickErr = "", armed = "", armTimer = 0, lastLog = "", lastRows = "", lastLinks = "", last = null;
+let paused = false, clickBusy = false, clickErr = "", armed = "", armTimer = 0, lastRows = "", lastLinks = "", last = null;
 
 // dropsBetween: kept tags from the live one back to just before x that dropped something on
 // purpose: x's code may still need it.
@@ -43,7 +29,7 @@ function render(v) {
   $("title").textContent = v.Box;
   $("offline").hidden = v.Online;
   $("online").hidden = !v.Online;
-  if (!v.Online) { $("cluster").textContent = v.Cluster || "The cluster"; lastLog = ""; return; }
+  if (!v.Online) { $("cluster").textContent = v.Cluster || "The cluster"; return; }
   $("sub").textContent = "on " + v.Cluster + " · " + v.Time;
   const links = (v.Links || []).map(l => `<a href="${esc(l.URL)}" target="_blank" rel="noopener">${esc(l.Label)}</a>`).join("");
   if (links !== lastLinks) { $("links").innerHTML = links; lastLinks = links; }
@@ -64,8 +50,7 @@ function render(v) {
   const html = rows.length ? rows.map(x => {
     let act = "";
     if (x.Kept && !x.Live) {
-      const risky = x.Back > 1 || dropsBetween(rows, x).length > 0;
-      act = button("rollback:" + x.Tag, x.Newer ? "Go to" : risky ? `Roll back ${x.Back}` : "Roll back", "stop", busy);
+      act = button("rollback:" + x.Tag, x.Newer ? "Go to" : "Roll back", "stop", busy);
     } else if (x.Newer && !x.Live) {
       act = button("canary:" + x.Tag, "Canary", "", busy) + button("quick:" + x.Tag, "Deploy", "", busy);
     }
@@ -78,7 +63,7 @@ function render(v) {
       <td><code class="${x.Live ? "live" : ""}">${esc(x.Tag)}</code> ${badges}${went}</td>
       <td>${meta || (x.Version ? `<code>${esc(x.Version)}</code>` : "")}<div class="muted">${esc(x.Subject)}</div></td>
       <td class="num hide-s">${esc(when(x.Created))}</td>
-      <td class="act">${act}</td></tr>`;
+      <td class="act">${act}${x.Run ? `<a class="logicon" href="${runURL(x.Run)}" title="the log of its last deploy">${LOG}</a>` : ""}</td></tr>`;
   }).join("") : `<tr><td colspan="4" class="muted">No tags read yet.</td></tr>`;
   if (html !== lastRows) { $("tags").innerHTML = html; lastRows = html; }
 
@@ -90,24 +75,10 @@ function render(v) {
   $("warn").hidden = !warn; $("warn").textContent = warn;
 
   const r = v.Run;
-  $("runcard").hidden = !r;
-  if (r) {
-    $("runtitle").textContent = (v.Busy ? "" : "Last: ") + (NAMES[r.Kind] || r.Kind) + (r.Allow ? " (anyway)" : "");
-    $("status").textContent = r.Status; $("status").className = "status " + r.Status;
-    $("what").textContent = `${r.From || "?"} → ${r.To}`;
-    $("when").textContent = when(r.Started) + " · " + took(r.Started, r.Finished);
-    $("steps").innerHTML = steps(r, STEPS[r.Kind] || []);
-    $("message").textContent = r.Message || "";
-    $("abortrow").hidden = !(v.Busy && v.Abortable);
-    $("abort").textContent = armed === "abort" ? "Click again to abort" : "Abort";
-    $("abort").classList.toggle("confirm", armed === "abort");
-    const text = (r.Log || []).join("\n") || "(no log)";
-    if (text !== lastLog) {
-      const pre = $("log"), atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
-      pre.textContent = text; lastLog = text;
-      if (atEnd) pre.scrollTop = pre.scrollHeight;
-    }
-  }
+  const now = v.Busy && r ? `<span class="status running">${esc(NAMES[r.Kind] || r.Kind)}</span> to <code>${esc(r.To)}</code>
+    <span class="muted">· ${esc(r.Step)} · ${esc(took(r.Started))}</span><a class="right" href="${runURL("")}">Show the progress</a>` : "";
+  $("busy").hidden = !now;
+  if ($("busy").dataset.html !== now) { $("busy").innerHTML = now; $("busy").dataset.html = now; }
   const b = !v.Busy && r && r.Status === "failed" && r.Blocked && r.Blocked.length && r.Kind !== "rollback" ? r : null;
   $("blocked").hidden = !b;
   if (b) {
@@ -132,8 +103,8 @@ async function poll() {
 }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && paused) { paused = false; poll(); } });
 
-// A click arms the button, a second click within 4 s sends it. what is canary:<tag>,
-// quick:<tag>, rollback:<tag>, anyway:<kind>:<tag> or abort.
+// A click arms the button, a second click within 4 s sends it and goes to the run page. what is
+// canary:<tag>, quick:<tag>, rollback:<tag> or anyway:<kind>:<tag>.
 async function click(what) {
   if (armed !== what) {
     armed = what; clearTimeout(armTimer);
@@ -147,11 +118,11 @@ async function click(what) {
   try {
     let [kind, a, b] = what.split(":");
     let url;
-    if (kind === "abort") url = "abort?b=" + encodeURIComponent(box);
-    else if (kind === "anyway") url = `${a}?b=${encodeURIComponent(box)}&tag=${encodeURIComponent(b)}&allow=1`;
+    if (kind === "anyway") url = `${a}?b=${encodeURIComponent(box)}&tag=${encodeURIComponent(b)}&allow=1`;
     else url = `${kind}?b=${encodeURIComponent(box)}&tag=${encodeURIComponent(a)}`;
     const r = await fetch(url, {method: "POST"});
     if (!r.ok) clickErr = "Failed: " + (await r.text());
+    else { location.href = runURL(""); return; }
   } catch (e) { clickErr = "Failed: " + e; }
   clickBusy = false; lastRows = "";
 }
@@ -159,7 +130,6 @@ $("tags").addEventListener("click", e => {
   const b = e.target.closest("button[data-what]");
   if (b && !b.disabled) click(b.dataset.what);
 });
-$("abort").addEventListener("click", () => click("abort"));
 $("anyway").addEventListener("click", () => click($("anyway").dataset.what));
 
 poll();

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>switchyard run</title>
+<link rel="icon" href="logo.svg">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1 class="top"><a class="logo" href="./"><img src="logo.svg" alt="switchyard"></a> <span id="head"></span> <small id="sub"></small></h1>
+
+  <div id="err" class="err" hidden></div>
+
+  <div class="card">
+    <div class="cardhead"><h2 id="title">Run</h2><a id="back" href="./">Back</a></div>
+    <div class="run" id="runline" hidden>
+      <span class="status" id="status"></span>
+      <span id="what" class="muted"></span>
+      <span id="when" class="muted num"></span>
+    </div>
+    <div class="steps" id="steps" hidden></div>
+    <p id="message" class="gap-b0"></p>
+    <div class="buttons gap-b" id="abortrow" hidden><button id="abort" class="stop">Abort</button><span class="muted">Deletes the canary copy; the live tag keeps everything.</span></div>
+    <div class="blocked danger gap-b" id="blocked" hidden>
+      <p>Stopped before migrating: these migrations would break the live tag, which keeps running on the database during a deploy (and a rollback goes back to it). Deploy anyway only for the planned last step of a change, once no kept tag needs what they drop.</p>
+      <ul id="blockedlist"></ul>
+      <div class="buttons"><button id="anyway" class="stop">Deploy anyway</button></div>
+    </div>
+    <pre id="log" class="tall"></pre>
+  </div>
+  <p class="muted" id="ver"></p>
+</main>
+<nav class="tabbar"><a href="./"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg><span>Boxes</span></a><a href="running"><svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="2,12 6,12 9,4 15,20 18,12 22,12"/></svg><span>Running</span></a><a href="password"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg><span>Settings</span></a></nav>
+<script src="run.js"></script>
+<script src="frame.js"></script>
+</body>
+</html>
