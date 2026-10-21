@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.15.0-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.15.1-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -73,8 +73,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.15.0/switchyard-0.15.0-linux-amd64
-install -m 0755 switchyard-0.15.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.15.1/switchyard-0.15.1-linux-amd64
+install -m 0755 switchyard-0.15.1-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -115,6 +115,9 @@ headers count.
 - **Turn the login off** there (with the password) when the proxy in front authenticates
   already, say with client certificates: then whoever reaches switchyard can deploy, restore and
   stop, so only where nothing else reaches its port. **Turn the login on** brings it back.
+- **Inside a dashboard** (under **Settings**): for switchyard shown in a dashboard with a top
+  bar of its own, the logo goes and the links (Boxes, Running, Settings, Log out) move to the
+  bottom line of each page, next to the version.
 - Clicks are protected against cross-site requests; the pages run only their own scripts and
   are framed only by their own origin.
 - Every action leaves one `audit` line in the journal (`journalctl --user -u switchyard`): the

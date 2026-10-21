@@ -4,6 +4,7 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -147,9 +148,23 @@ func first(a ...string) string {
 	return ""
 }
 
-func page(name string) http.HandlerFunc {
+// page serves one of pages/; an HTML page gets the classes of the setup on its <html>: embedded
+// (inside a dashboard: no logo, the links at the bottom) and login (it is on).
+func (s *Server) page(name string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		b, _ := pages.ReadFile("pages/" + name)
+		if cfg := s.store.Get(); cfg != nil && strings.HasSuffix(name, ".html") {
+			var class []string
+			if cfg.Embedded {
+				class = append(class, "embedded")
+			}
+			if !cfg.NoLogin {
+				class = append(class, "login")
+			}
+			if class != nil {
+				b = bytes.Replace(b, []byte(`<html lang="en">`), []byte(`<html lang="en" class="`+strings.Join(class, " ")+`">`), 1)
+			}
+		}
 		switch {
 		case strings.HasSuffix(name, ".css"):
 			w.Header().Set("Content-Type", "text/css; charset=utf-8")
@@ -220,20 +235,20 @@ func (s *Server) routes() http.Handler {
 				redirect(w, "./")
 				return
 			}
-			page(name)(w, r)
+			s.page(name)(w, r)
 		})
 	}
 
 	open("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case s.store.Get() == nil && s.setupToken(r.URL.Query().Get("token")):
-			page("setup.html")(w, r)
+			s.page("setup.html")(w, r)
 		case s.store.Get() == nil:
 			http.Error(w, "switchyard is not set up: run switchyard setup and open the URL it prints", http.StatusForbidden)
 		case !s.session(w, r):
 			redirect(w, "login")
 		default:
-			page("boxes.html")(w, r)
+			s.page("boxes.html")(w, r)
 		}
 	})
 	privatePage("GET /box", "box.html")
@@ -245,7 +260,7 @@ func (s *Server) routes() http.Handler {
 			redirect(w, "./")
 			return
 		}
-		page("login.html")(w, r)
+		s.page("login.html")(w, r)
 	})
 	open("POST /login", s.login)
 	open("POST /logout", func(w http.ResponseWriter, r *http.Request) {
@@ -259,11 +274,13 @@ func (s *Server) routes() http.Handler {
 	private("POST /password", s.password)
 	private("POST /login-off", func(w http.ResponseWriter, r *http.Request) { s.loginSwitch(w, r, true) })
 	private("POST /login-on", func(w http.ResponseWriter, r *http.Request) { s.loginSwitch(w, r, false) })
+	private("POST /embedded", s.embedded)
 	private("GET /login-state", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]bool{"Login": !s.store.Get().NoLogin})
+		cfg := s.store.Get()
+		writeJSON(w, map[string]bool{"Login": !cfg.NoLogin, "Embedded": cfg.Embedded})
 	})
-	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js", "backups.js", "running.js", "power.js"} {
-		open("GET /"+f, page(f))
+	for _, f := range []string{"style.css", "login.js", "setup.js", "boxes.js", "box.js", "password.js", "backups.js", "running.js", "power.js", "frame.js"} {
+		open("GET /"+f, s.page(f))
 	}
 	open("GET /logo.svg", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/svg+xml")
@@ -428,6 +445,22 @@ func (s *Server) loginSwitch(w http.ResponseWriter, r *http.Request, off bool) {
 	}
 	if !off {
 		s.newSession(w, r, s.store.Get())
+	}
+	redirect(w, "password?"+action+"=1")
+}
+
+// embedded turns the dashboard layout on or off: no logo, the links at the bottom.
+func (s *Server) embedded(w http.ResponseWriter, r *http.Request) {
+	on := r.FormValue("on") == "1"
+	err := s.store.Update(func(c *config.Config) error { c.Embedded = on; return nil })
+	action := "embedded-off"
+	if on {
+		action = "embedded-on"
+	}
+	s.audit(r, s.store.Get().User, action, "", "", err)
+	if err != nil {
+		fail(w, err)
+		return
 	}
 	redirect(w, "password?"+action+"=1")
 }

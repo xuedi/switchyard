@@ -20,6 +20,7 @@ type Config struct {
 	Generation     int      `json:"generation,omitempty"`     // in every session: one more ends them all
 	TrustedProxies []string `json:"trustedProxies,omitempty"` // whose X-Forwarded-* count, "" is the loopback
 	NoLogin        bool     `json:"noLogin,omitempty"`        // behind a proxy that authenticates already
+	Embedded       bool     `json:"embedded,omitempty"`       // inside a dashboard: no logo, the links at the bottom
 
 	Kubectl         string `json:"kubectl"`
 	AdminKubeconfig string `json:"adminKubeconfig,omitempty"` // "" is kubectl's default

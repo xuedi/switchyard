@@ -130,6 +130,13 @@ ul.wlist li .muted { margin-top: 2px; }
 .pd.wait { background: var(--warn); } .pd.bad { background: var(--stop); }
 .cronline { font-size: 13px; padding: 9px 0 0; border-top: 1px solid var(--line); }
 .tabbar { display: none; }
+.embedded h1 img, .embedded h1 .logo, .embedded .navtop { display: none; }
+.foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; margin: 14px 0 0; }
+.foot #ver { margin: 0; }
+.footnav { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; font-size: 13px; }
+.footnav a.on { color: var(--text); font-weight: 600; text-decoration: none; }
+.footnav form { display: inline; }
+.footnav button.plain { padding: 0; font-size: 13px; min-height: 0; }
 
 /* phones: no tables, a tab bar at the bottom, bigger targets */
 @media (max-width: 640px) {
@@ -139,7 +146,7 @@ ul.wlist li .muted { margin-top: 2px; }
   button { min-height: 40px; }
   button.small, button.plain, td.act button { min-height: 34px; }
   pre { max-height: 320px; white-space: pre; word-break: normal; overflow-x: auto; font-size: 11px; }
-  .wide { display: none; }
+  .wide, .footnav a { display: none; }
   .tabbar { display: flex; position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--card);
             border-top: 1px solid var(--line); padding: 6px 0 calc(6px + env(safe-area-inset-bottom)); }
   .tabbar a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 11px;
