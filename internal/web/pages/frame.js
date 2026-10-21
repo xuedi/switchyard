@@ -1,5 +1,6 @@
 "use strict";
-// Inside a dashboard: the links leave the top and join the version at the bottom, on the right.
+// Inside a dashboard: the links leave the top for the version's line at the bottom, the page's own
+// (a box's site and mail) on the left, the navigation on the right.
 (() => {
   const root = document.documentElement;
   if (!root.classList.contains("embedded")) return;
@@ -9,6 +10,8 @@
   if (!ver) { ver = document.createElement("p"); ver.id = "ver"; }
   ver.classList.add("muted");
   foot.appendChild(ver);
+  const links = document.querySelector("h1 .links");
+  if (links) foot.appendChild(links);
   const nav = document.createElement("nav");
   nav.className = "footnav";
   for (const t of document.querySelectorAll(".tabbar a")) {
