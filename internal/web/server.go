@@ -585,14 +585,16 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 // boxes is the list page's data: every box's view without the logs and the tags.
 func (s *Server) boxes(w http.ResponseWriter, r *http.Request) {
 	cfg := s.store.Get()
-	list := []json.RawMessage{}
-	for _, b := range cfg.Boxes {
-		list = append(list, s.snap(b.ID()).get())
+	list := make([]json.RawMessage, len(cfg.Boxes))
+	backups := make([]json.RawMessage, len(cfg.Backups))
+	var wg sync.WaitGroup
+	for i, b := range cfg.Boxes {
+		wg.Go(func() { list[i] = s.snap(b.ID()).get() })
 	}
-	backups := []json.RawMessage{}
-	for _, set := range cfg.Backups {
-		backups = append(backups, s.bsnap(set.Namespace).get())
+	for i, set := range cfg.Backups {
+		wg.Go(func() { backups[i] = s.bsnap(set.Namespace).get() })
 	}
+	wg.Wait()
 	writeJSON(w, map[string]any{"Version": s.version, "Login": !cfg.NoLogin, "Cluster": cfg.Cluster, "Online": s.eng().K.Online(r.Context()),
 		"Boxes": list, "Backups": backups})
 }

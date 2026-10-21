@@ -69,12 +69,17 @@ function render(v) {
   if ($("busy").dataset.html !== now) { $("busy").innerHTML = now; $("busy").dataset.html = now; }
 }
 
+// The last view of this page, shown at once while the first poll runs; its buttons wait for it.
+const viewKey = "sy-view:" + location.pathname.split("/").pop() + location.search;
+function cachedView() { try { const v = JSON.parse(localStorage.getItem(viewKey)); if (v) document.body.classList.add("cached"); return v; } catch (e) { return null; } }
+function keepView(v) { document.body.classList.remove("cached"); try { localStorage.setItem(viewKey, JSON.stringify(v)); } catch (e) { /* only this tab's memory */ } }
+
 async function poll() {
   if (document.hidden) { paused = true; return; }
   try {
     const r = await fetch("backup/state" + q, {cache: "no-store"});
     if (r.status === 401) { location.href = "login"; return; }
-    if (r.ok) render(last = await r.json());
+    if (r.ok) { render(last = await r.json()); keepView(last); }
     else if (!formOpen) openForm();
   } catch (e) { /* keep the last view */ }
   setTimeout(poll, 2000);
@@ -288,4 +293,5 @@ $("remove").addEventListener("click", async () => {
 });
 
 if (params.has("edit")) openForm();
+{ const v = cachedView(); if (v) render(v); }
 poll();

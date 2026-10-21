@@ -9,6 +9,8 @@ import (
 // snapshot holds the latest view as JSON. It is refreshed in the background every refreshEvery,
 // but only while someone polls: idleAfter after the last poll, switchyard stops calling the
 // cluster altogether. All viewers share the same snapshot, so ten open tabs cost what one does.
+// After a quiet spell a poll gets the last view at once and the loop reads the new one; only the
+// very first poll waits for it.
 type snapshot struct {
 	read         func() any
 	refreshEvery time.Duration
@@ -16,7 +18,6 @@ type snapshot struct {
 
 	mu       sync.Mutex
 	v        []byte
-	at       time.Time
 	lastPoll time.Time
 	wake     chan struct{}
 }
@@ -25,14 +26,13 @@ func newSnapshot(read func() any, refreshEvery, idleAfter time.Duration) *snapsh
 	return &snapshot{read: read, refreshEvery: refreshEvery, idleAfter: idleAfter, wake: make(chan struct{}, 1)}
 }
 
-// get returns the latest view. After a quiet spell it reads the cluster right away (so the
-// first poll is not stale) and wakes the background loop.
+// get returns the latest view and wakes the background loop.
 func (s *snapshot) get() []byte {
 	s.mu.Lock()
 	s.lastPoll = time.Now()
-	v, fresh := s.v, s.v != nil && time.Since(s.at) < s.idleAfter
+	v := s.v
 	s.mu.Unlock()
-	if !fresh {
+	if v == nil {
 		v = s.refresh()
 	}
 	select {
@@ -45,7 +45,7 @@ func (s *snapshot) get() []byte {
 func (s *snapshot) refresh() []byte {
 	b, _ := json.Marshal(s.read())
 	s.mu.Lock()
-	s.v, s.at = b, time.Now()
+	s.v = b
 	s.mu.Unlock()
 	return b
 }

@@ -44,11 +44,14 @@ function backupRow(v) {
   </div>`;
 }
 
+
+// The last view of this page, shown at once while the first poll runs; its buttons wait for it.
+const viewKey = "sy-view:" + location.pathname.split("/").pop() + location.search;
+function cachedView() { try { const v = JSON.parse(localStorage.getItem(viewKey)); if (v) document.body.classList.add("cached"); return v; } catch (e) { return null; } }
+function keepView(v) { document.body.classList.remove("cached"); try { localStorage.setItem(viewKey, JSON.stringify(v)); } catch (e) { /* only this tab's memory */ } }
+
 let lastHTML = "";
-async function poll() {
-  if (document.hidden) { paused = true; return; }
-  try {
-    const d = await getJSON("boxes");
+function render(d) {
     $("sub").textContent = d.Cluster ? "on " + d.Cluster : "";
     $("ver").textContent = "switchyard " + d.Version;
     $("logout").hidden = !d.Login;
@@ -57,6 +60,13 @@ async function poll() {
     const html = d.Boxes.length ? d.Boxes.map(boxRow).join("") : `<p class="muted">No box yet. A box is one Deployment: switchyard moves its image from tag to tag.</p>`;
     if (html !== lastHTML) { $("boxes").innerHTML = html; lastHTML = html; }
     $("backups").innerHTML = (d.Backups || []).map(backupRow).join("") || `<p class="muted">No namespace backed up yet. A backup set saves a namespace's databases and volumes as dated archives on a PVC.</p>`;
+}
+
+async function poll() {
+  if (document.hidden) { paused = true; return; }
+  try {
+    const d = await getJSON("boxes");
+    render(d); keepView(d);
   } catch (e) { /* keep the last list */ }
   setTimeout(poll, 3000);
 }
@@ -163,4 +173,5 @@ $("save").addEventListener("click", async () => {
   } catch (e) { showErr(e); }
   $("save").disabled = false;
 });
+{ const v = cachedView(); if (v) render(v); }
 poll();

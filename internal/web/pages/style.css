@@ -79,6 +79,7 @@ input[type=checkbox] { width: auto; margin-right: 6px; }
 details summary { cursor: pointer; color: var(--btn); margin: 12px 0 4px; }
 .ok-box { padding: 8px 12px; border-radius: 8px; background: color-mix(in srgb, var(--ok) 15%, transparent); margin-top: 10px; }
 [hidden] { display: none !important; }
+.cached main button { pointer-events: none; opacity: .55; }
 @media (max-width: 600px) { .hide-s { display: none; } .grid { grid-template-columns: 1fr; } }
 .center { justify-content: center; }
 .gap-t { margin-top: 14px; } .gap-b { margin-bottom: 10px; } .gap-b0 { margin: 0 0 10px; }
