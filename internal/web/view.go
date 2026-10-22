@@ -31,6 +31,7 @@ type View struct {
 	Replicas  int
 	Ready     int
 	Canary    *Canary
+	Managed   []Managed // the box's StatefulSets, as they run
 	Images    []Row
 	Keep      int
 	Pause     int
@@ -46,6 +47,22 @@ type Canary struct {
 	Share           int // about this many percent of the traffic
 }
 
+// Managed is a StatefulSet the box's tags may move: its image as it runs.
+type Managed struct {
+	Name    string
+	Image   string
+	Missing bool
+}
+
+// Want is a tag's label for a StatefulSet: Moves when a deploy of the tag would move it, Problem
+// when it refuses the deploy.
+type Want struct {
+	Name    string
+	Image   string
+	Moves   bool
+	Problem string
+}
+
 type Row struct {
 	Tag      string
 	Created  string
@@ -53,6 +70,7 @@ type Row struct {
 	Subject  string
 	Revision string
 	Meta     []Meta
+	Wants    []Want
 	Live     bool
 	Kept     bool
 	Canary   bool
@@ -62,6 +80,8 @@ type Row struct {
 	Back     int    // kept tags between the live one and it, negative when newer
 	Missing  bool   // kept, but gone from the registry
 	Run      string // the start of the newest run to it, for its log
+
+	labels map[string]string
 }
 
 type Meta struct{ Key, Value string }
@@ -90,7 +110,11 @@ func (s *Server) view(id string) any {
 	var list struct {
 		Items []json.RawMessage `json:"items"`
 	}
-	err := s.eng().K.Get(ctx, &list, "--namespace="+b.Namespace, "get", "--ignore-not-found", "--", "deployment/"+b.Deployment, "deployment/"+b.Deployment+"-canary", "configmap/"+b.State())
+	objs := []string{"deployment/" + b.Deployment, "deployment/" + b.Deployment + "-canary", "configmap/" + b.State()}
+	for _, n := range b.StatefulSets {
+		objs = append(objs, "statefulset/"+n, "pod/"+n+"-0") // the first pod's digest stands for all
+	}
+	err := s.eng().K.Get(ctx, &list, append([]string{"--namespace=" + b.Namespace, "get", "--ignore-not-found", "--"}, objs...)...)
 	if kube.IsOffline(err) {
 		return v
 	}
@@ -101,6 +125,8 @@ func (s *Server) view(id string) any {
 	}
 	var dep, cp *kube.Deployment
 	var st deploy.State
+	sets := map[string]kube.StatefulSet{}
+	var pods []kube.Pod
 	for _, raw := range list.Items {
 		var head struct {
 			Kind     string
@@ -111,6 +137,14 @@ func (s *Server) view(id string) any {
 		switch {
 		case head.Kind == "ConfigMap":
 			json.Unmarshal([]byte(head.Data["state"]), &st)
+		case head.Kind == "StatefulSet":
+			var x kube.StatefulSet
+			json.Unmarshal(raw, &x)
+			sets[x.Metadata.Name] = x
+		case head.Kind == "Pod":
+			var p kube.Pod
+			json.Unmarshal(raw, &p)
+			pods = append(pods, p)
 		case head.Metadata.Name == b.Deployment:
 			dep = &kube.Deployment{}
 			json.Unmarshal(raw, dep)
@@ -133,6 +167,17 @@ func (s *Server) view(id string) any {
 		if total := v.Canary.Ready + v.Ready; total > 0 {
 			v.Canary.Share = 100 * v.Canary.Ready / total
 		}
+	}
+
+	cur := map[string]deploy.Current{}
+	for _, n := range b.StatefulSets {
+		x, ok := sets[n]
+		if !ok {
+			v.Managed = append(v.Managed, Managed{Name: n, Missing: true})
+			continue
+		}
+		cur[n] = deploy.CurrentOf(x, pods)
+		v.Managed = append(v.Managed, Managed{Name: n, Image: cur[n].Shown()})
 	}
 
 	v.Runs = map[string]deploy.Run{}
@@ -160,6 +205,11 @@ func (s *Server) view(id string) any {
 		v.Error = "registry: " + err.Error()
 	}
 	v.Images = rows(ctx, run, c.Image, images, st, v.Live, v.Canary)
+	if len(b.StatefulSets) > 0 {
+		for i := range v.Images {
+			v.Images[i].Wants = wants(b, cur, v.Images[i].labels)
+		}
+	}
 	for _, r := range v.Images {
 		if r.Live {
 			v.Subject = r.Subject
@@ -203,7 +253,7 @@ func rows(ctx context.Context, run *deploy.Runner, image string, images []regist
 		}
 		r := Row{Tag: tag, Live: tag == live, Kept: isKept, Newer: newer && tag != live, Missing: missing[tag],
 			Version: img.Labels["org.opencontainers.image.version"], Subject: img.Labels["switchyard.subject"],
-			Revision: img.Labels["org.opencontainers.image.revision"], Canary: cp != nil && cp.Tag == tag}
+			Revision: img.Labels["org.opencontainers.image.revision"], Canary: cp != nil && cp.Tag == tag, labels: img.Labels}
 		if !img.Created.IsZero() {
 			r.Created = img.Created.Format(time.RFC3339)
 		}
@@ -243,6 +293,26 @@ func rows(ctx context.Context, run *deploy.Runner, image string, images []regist
 			list[i].Back = j - at
 		}
 	}
+	return list
+}
+
+// wants is what a tag's labels ask of the box's StatefulSets, by name.
+func wants(b config.Box, cur map[string]deploy.Current, labels map[string]string) []Want {
+	var list []Want
+	for name, img := range deploy.Wanted(labels) {
+		w := Want{Name: name, Image: img}
+		c, ok := cur[name]
+		switch {
+		case !slices.Contains(b.StatefulSets, name):
+			w.Problem = "not managed by the box"
+		case registry.Digest(img) == "":
+			w.Problem = "no @sha256: digest"
+		case ok:
+			w.Moves = !c.Same(img)
+		}
+		list = append(list, w)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
 	return list
 }
 

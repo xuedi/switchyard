@@ -99,6 +99,14 @@ func (s *Server) start(cfg *config.Config) {
 	k := kube.Kube{Bin: cfg.Kubectl, Kubeconfig: config.Kubeconfig()}
 	e := deploy.NewEngine(k)
 	bk := backup.NewEngine(k, func(ns string) string { return first(s.boxBusy(ns), s.stk().Running(ns)) })
+	e.HasBackup = func(ns string) bool { _, ok := s.store.Backup(ns); return ok }
+	e.Backup = func(ctx context.Context, ns, by string) (string, error) {
+		set, ok := s.store.Backup(ns)
+		if !ok {
+			return "", errors.New(ns + " has no backup set")
+		}
+		return bk.Runner(set).BeforeDeploy(ctx, by)
+	}
 	st := stack.NewEngine(k, func(ns string) string { return first(s.boxBusy(ns), s.bk().Busy(ns)) })
 	s.mu.Lock()
 	s.engine, s.backups, s.stacks = e, bk, st

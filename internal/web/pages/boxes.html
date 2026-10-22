@@ -53,6 +53,8 @@
       </div>
       <label>Followers: moved to the same tag at every switch</label>
       <div id="followers" class="muted">none run the same image</div>
+      <label>Managed StatefulSets: a tag's <code>switchyard.statefulset.&lt;name&gt;</code> label moves them forward, after a backup of the namespace</label>
+      <div id="statefulsets" class="muted">none in the namespace</div>
       <label for="pendingsql">Pending-SQL command (prints the SQL of the pending migrations, checked before anything moves)</label>
       <input id="pendingsql" placeholder="e.g. bin/pending-sql">
       <label for="migrate">Migrate command (runs before any traffic moves)</label>

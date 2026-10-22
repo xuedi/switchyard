@@ -48,7 +48,7 @@ type Archive struct {
 	Size     int64
 	Complete bool
 	Manifest bool
-	Kind     string // from the manifest: manual, scheduled, pre-restore
+	Kind     string // from the manifest: manual, scheduled, pre-restore, pre-deploy
 }
 
 var runPrefix = regexp.MustCompile(`^(\d{4}-\d\d-\d\d_\d\d-\d\d)_(.+)$`)

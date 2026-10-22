@@ -29,6 +29,7 @@
       </div>
       <div class="muted" id="canary"></div>
       <div class="muted"><code id="repo"></code></div>
+      <div class="muted" id="managed"></div>
     </div>
 
     <div class="card running-now" id="busy" hidden></div>
@@ -49,7 +50,7 @@
       <div id="warn" class="warn" hidden></div>
     </div>
 
-    <p class="muted">Canary runs the new tag in a copy of the Deployment next to the live pods, first 1 pod, then as many as the live ones, <span id="pause"></span> each, with the pages requested from a new and an old pod, and aborts on its own when the new tag turns unhealthy. Deploy puts the tag on the Deployment at once, no checks. Both run the migrations first. <span id="kept"></span> Roll back puts one of them back at once; the database stays as it is. <span id="ver"></span></p>
+    <p class="muted">Canary runs the new tag in a copy of the Deployment next to the live pods, first 1 pod, then as many as the live ones, <span id="pause"></span> each, with the pages requested from a new and an old pod, and aborts on its own when the new tag turns unhealthy. Deploy puts the tag on the Deployment at once, no checks. Both run the migrations first, and before them move the managed StatefulSets a tag wants on another image, after a backup of the namespace; that move is forward only. <span id="kept"></span> Roll back puts one of them back at once; the database stays as it is. <span id="ver"></span></p>
   </div>
 </main>
 <nav class="tabbar"><a href="./" class="on"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg><span>Boxes</span></a><a href="running"><svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="2,12 6,12 9,4 15,20 18,12 22,12"/></svg><span>Running</span></a><a href="password"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg><span>Settings</span></a></nav>

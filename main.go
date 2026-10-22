@@ -22,7 +22,7 @@ import (
 	"github.com/xuedi/switchyard/internal/web"
 )
 
-const version = "0.16.3"
+const version = "0.17.0"
 
 //go:embed assets/switchyard.svg
 var logo []byte

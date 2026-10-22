@@ -49,14 +49,16 @@ type Box struct {
 	Deployment string   `json:"deployment"`
 	Container  string   `json:"container,omitempty"` // "" is the first one
 	Followers  []string `json:"followers,omitempty"` // cronjob/<name> or deployment/<name>, moved along
-	PendingSQL string   `json:"pendingSQL,omitempty"`
-	Migrate    string   `json:"migrate,omitempty"`
-	Cache      string   `json:"cache,omitempty"` // after every switch
-	Site       string   `json:"site,omitempty"`  // e.g. https://shop.example.org: Host and X-Forwarded-Proto of the probes
-	Pages      []string `json:"pages,omitempty"`
-	Links      string   `json:"links,omitempty"` // "label=url ..." in the header
-	Pause      int      `json:"pause,omitempty"` // seconds per canary step
-	Keep       int      `json:"keep,omitempty"`
+	// StatefulSets of the namespace a tag may move forward, by its switchyard.statefulset.<name>
+	StatefulSets []string `json:"statefulSets,omitempty"`
+	PendingSQL   string   `json:"pendingSQL,omitempty"`
+	Migrate      string   `json:"migrate,omitempty"`
+	Cache        string   `json:"cache,omitempty"` // after every switch
+	Site         string   `json:"site,omitempty"`  // e.g. https://shop.example.org: Host and X-Forwarded-Proto of the probes
+	Pages        []string `json:"pages,omitempty"`
+	Links        string   `json:"links,omitempty"` // "label=url ..." in the header
+	Pause        int      `json:"pause,omitempty"` // seconds per canary step
+	Keep         int      `json:"keep,omitempty"`
 }
 
 func (b Box) ID() string { return b.Namespace + "/" + b.Deployment }

@@ -8,12 +8,14 @@ const took = (a, b) => { if (!a) return ""; const s = Math.max(0, Math.round(((b
   return s >= 60 ? Math.floor(s / 60) + " min " + (s % 60) + " s" : s + " s"; };
 
 const STEPS = {
-  canary: [["migrate", "migrate"], ["one", "1 pod"], ["half", "half"], ["switch", "switch"], ["after", "after"], ["done", "done"]],
-  quick: [["migrate", "migrate"], ["switch", "switch"], ["after", "after"], ["done", "done"]],
+  canary: [["check", "check"], ["statefulsets", "statefulsets"], ["migrate", "migrate"], ["one", "1 pod"], ["half", "half"], ["switch", "switch"], ["after", "after"], ["done", "done"]],
+  quick: [["check", "check"], ["statefulsets", "statefulsets"], ["migrate", "migrate"], ["switch", "switch"], ["after", "after"], ["done", "done"]],
   rollback: [["switch", "switch"], ["after", "after"], ["done", "done"]],
 };
+// the statefulsets step only for a run that moves some
+const stepsOf = r => (STEPS[r.Kind] || []).filter(s => s[0] !== "statefulsets" || (r.Moves || []).length);
 const NAMES = {canary: "Canary deploy", quick: "Deploy", rollback: "Rollback", manual: "Backup", scheduled: "Scheduled backup",
-  "pre-restore": "Safety backup", restore: "Restore", index: "Listing", start: "Start", stop: "Stop"};
+  "pre-restore": "Safety backup", "pre-deploy": "Backup before a deploy", restore: "Restore", index: "Listing", start: "Start", stop: "Stop"};
 
 // b: a box's deploy, n: a backup set's run, s: Running's last Start or Stop. Without r the page
 // follows what runs: a restore's safety backup, then the restore.
@@ -60,10 +62,13 @@ function render(v) {
   $("status").textContent = r.Status; $("status").className = "status " + r.Status;
   $("what").textContent = kind === "b" ? `${r.From || "?"} → ${r.To}` : r.By ? "by " + r.By : "";
   $("when").textContent = when(r.Started) + " · " + took(r.Started, r.Finished);
-  const st = kind === "b" ? steps(r, STEPS[r.Kind] || []) : "";
+  const st = kind === "b" ? steps(r, stepsOf(r)) : "";
   $("steps").hidden = !st;
   if ($("steps").innerHTML !== st) $("steps").innerHTML = st;
   $("message").textContent = r.Message || "";
+  const moves = kind === "b" ? (r.Moves || []).map(m => `<li>statefulset ${esc(m.StatefulSet)}: <code>${esc(m.From)}</code> → <code>${esc(m.To)}</code></li>`).join("") : "";
+  $("moves").hidden = !moves;
+  if ($("moves").innerHTML !== moves) $("moves").innerHTML = moves;
   $("abortrow").hidden = !(kind === "b" && v.Running && v.Abortable);
   $("abort").textContent = armed === "abort" ? "Click again to abort" : "Abort";
   $("abort").classList.toggle("confirm", armed === "abort");

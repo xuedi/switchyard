@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.16.3-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.17.0-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -68,13 +68,15 @@ a page is open.
 
 | Button | What happens |
 |---|---|
-| **Canary** | The pending-SQL check and the migrate command in Jobs of the new image. Then `<deployment>-canary` with 1 pod of the new tag next to the live ones, watched for the pause; then as many pods as the live ones (about half the traffic), watched again. Then the Deployment gets the tag (a normal rolling update), the followers too, the copy goes, and the cache command runs. A failure, or **Abort**, deletes the copy; nothing else changed. |
-| **Deploy** | The same migrations, then the tag on the Deployment and the followers at once, then the cache command. |
-| **Roll back** | A kept tag on the Deployment and the followers at once, then the cache command. The database is not rolled back. |
+| **Canary** | The pending-SQL check in a Job of the new image, then the managed StatefulSets the tag wants on another image (after a backup), then the migrate command. Then `<deployment>-canary` with 1 pod of the new tag next to the live ones, watched for the pause; then as many pods as the live ones (about half the traffic), watched again. Then the Deployment gets the tag (a normal rolling update), the followers too, the copy goes, and the cache command runs. A failure, or **Abort**, deletes the copy; nothing else changed. |
+| **Deploy** | The same check, StatefulSets and migrations, then the tag on the Deployment and the followers at once, then the cache command. |
+| **Roll back** | A kept tag on the Deployment and the followers at once, then the cache command. The database and the managed StatefulSets are not rolled back. |
 
 **Followers** are CronJobs and Deployments that run the same image (a scheduler, a worker):
 they get the tag at every switch. If a rollout does not finish within 10 minutes, the
-Deployment goes back to the tag it had.
+Deployment goes back to the tag it had. The cache command runs up to three times, 10 s apart (a
+new pod's first connection may be refused); if it still fails, the tag stays live and the run
+says so.
 
 ## Install
 
@@ -82,8 +84,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.16.3/switchyard-0.16.3-linux-amd64
-install -m 0755 switchyard-0.16.3-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.17.0/switchyard-0.17.0-linux-amd64
+install -m 0755 switchyard-0.17.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -143,9 +145,10 @@ headers count.
 |---|---|
 | Container | which one, when the pod has several |
 | Followers | CronJobs and Deployments in the namespace that run the same image |
+| Managed StatefulSets | the namespace's StatefulSets (one container each) that a tag may move, see [Managed StatefulSets](#managed-statefulsets) |
 | Pending-SQL command | prints the SQL of the pending migrations, nothing when none; run in the new image before anything moves, once more when it fails (it only reads) |
 | Migrate command | runs the migrations; in the new image, after the check, before any traffic |
-| Cache command | runs after every switch, forward and back |
+| Cache command | runs after every switch, forward and back; up to three times |
 | Site | e.g. `https://shop.example.org`: its host goes as `Host`, its scheme as `X-Forwarded-Proto` with every probe, and it is linked |
 | Pages | the paths requested from a new and an old pod during each canary step |
 | Links | more links in the header, `label=url ...` |
@@ -172,6 +175,8 @@ What your app's build has to deliver for switchyard:
 - Optional, shown on the page: `org.opencontainers.image.version` and `revision`,
   `switchyard.subject` (e.g. the commit subject), `switchyard.meta.<key>` (e.g. one commit per
   repository).
+- Optional, `switchyard.statefulset.<name>=<repo>:<tag>@sha256:<digest>`: the image this release
+  wants for the StatefulSet `<name>` in its namespace (a cache, an S3 store), see below.
 - If the app has migrations: a pending-SQL command (stdout the SQL, logs on stderr, a line
   `-- Version <name>` or `-- Migration <name>` before each migration's statements), a migrate
   command, and `sh` plus a writable `/tmp` in the image for the check's wrapper.
@@ -179,6 +184,31 @@ What your app's build has to deliver for switchyard:
 
 Registries: ghcr.io, Docker Hub and any registry with the OCI distribution API and bearer or
 basic auth.
+
+## Managed StatefulSets
+
+An app's stateful services are pinned and tested by the app's repository; their versions can
+travel with its release. A tag's `switchyard.statefulset.<name>` labels say which image each
+StatefulSet should run, and a box lists which StatefulSets it manages (opt-in).
+
+- **Before anything moves:** a label for a StatefulSet the box does not manage, or one without
+  an `@sha256:` digest, refuses the deploy; so does a move in a namespace without a backup set.
+  A box that manages none ignores the labels.
+- **Compared by digest** with what the pods run (their `imageID`, the index digest of a
+  multi-arch image), so a StatefulSet pinned by tag only counts as unchanged when the digest
+  matches. Equal: nothing happens.
+- **A move:** after the pending-SQL check, a backup of the namespace's set (marked pre-deploy,
+  always hot, waited for); a failed backup stops the deploy. Then each StatefulSet gets the image
+  and is waited for (10 minutes; a new pod that cannot pull or start fails it after 3). A move
+  that does not get ready stops the deploy before the migrations and the app.
+- **Forward only:** a moved StatefulSet stays moved, whatever follows; Roll back moves the app
+  only and logs what it leaves. Going back is a restore of the pre-deploy backup.
+- A pod that never got ready is not replaced by the StatefulSet controller, not even for a new
+  image: the run says which, delete it and it comes back on the new one.
+- The box page shows what each managed StatefulSet runs, and with a new tag what it would move;
+  the run page lists the moves.
+
+The box's Role gets `patch` on exactly the managed StatefulSets.
 
 ## Migrations
 
@@ -261,7 +291,8 @@ timestamp per run, in the set's time zone; a run without a manifest is incomplet
   `emptyDir`, the tools image tars it, so the node needs room for one bucket at a time. Objects
   only: their metadata, versions and the bucket's settings are not in the archive; a restore
   sets the content type from the extension.
-- A backup or restore waits for a canary or deploy in the namespace, and the other way round.
+- A backup or restore waits for a canary or deploy in the namespace, and the other way round; a
+  deploy that moves a managed StatefulSet runs its own backup first (pre-deploy).
 - A namespace stopped on **Running** has its schedule suspended with it: the backups say so in
   grey, not as a warning, and Start resumes it. The CronJob stays, so a host backup still skips
   the namespace; its volumes do not change while it is stopped.

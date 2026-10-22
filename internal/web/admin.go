@@ -97,12 +97,13 @@ func (s *Server) adminDeployments(w http.ResponseWriter, r *http.Request) {
 }
 
 type details struct {
-	Containers  []kube.Container
-	Image       string
-	Registry    string
-	Followers   []string // CronJobs and Deployments running the same repository
-	PullSecrets []string
-	HasCreds    bool
+	Containers   []kube.Container
+	Image        string
+	Registry     string
+	Followers    []string // CronJobs and Deployments running the same repository
+	StatefulSets []string // the namespace's StatefulSets with one container, to manage
+	PullSecrets  []string
+	HasCreds     bool
 }
 
 // adminDetails: what the "more" part of the form offers for a Deployment.
@@ -150,6 +151,15 @@ func (s *Server) adminDetails(w http.ResponseWriter, r *http.Request) {
 				res.Followers = append(res.Followers, "deployment/"+o.Metadata.Name)
 			}
 		}
+	}
+	var sts struct{ Items []kube.StatefulSet }
+	if k.Get(ctx, &sts, "--namespace="+ns, "get", "statefulsets") == nil {
+		for _, x := range sts.Items {
+			if len(x.Spec.Template.Spec.Containers) == 1 {
+				res.StatefulSets = append(res.StatefulSets, x.Metadata.Name)
+			}
+		}
+		slices.Sort(res.StatefulSets)
 	}
 	res.PullSecrets, _ = deploy.PullSecrets(ctx, k, ns, name)
 	for _, n := range res.PullSecrets {
@@ -217,6 +227,13 @@ func (s *Server) saveBox(r *http.Request) (string, error) {
 			return b.ID(), badRequest("a follower is cronjob/<name> or deployment/<name>, not " + f)
 		}
 	}
+	for _, n := range b.StatefulSets {
+		if !kube.ValidName(n) {
+			return b.ID(), badRequest(fmt.Sprintf("%q is not a valid StatefulSet name", n))
+		}
+	}
+	slices.Sort(b.StatefulSets)
+	b.StatefulSets = slices.Compact(b.StatefulSets)
 	if f.Original != "" {
 		if _, ok := s.store.Box(f.Original); !ok {
 			return b.ID(), badRequest("no such box " + f.Original)
@@ -245,6 +262,15 @@ func (s *Server) saveBox(r *http.Request) (string, error) {
 	c, ok := d.Spec.Template.Spec.Pick(b.Container)
 	if !ok {
 		return b.ID(), badRequest("no container " + b.Container)
+	}
+	for _, n := range b.StatefulSets {
+		var x kube.StatefulSet
+		if err := k.Get(ctx, &x, "--namespace="+b.Namespace, "get", "--", "statefulset", n); err != nil {
+			return b.ID(), err
+		}
+		if len(x.Spec.Template.Spec.Containers) != 1 {
+			return b.ID(), badRequest("statefulset " + n + " has more than one container: switchyard moves only one")
+		}
 	}
 	if f.RegistryToken != "" {
 		if err := addPullSecret(ctx, k, b.Namespace, d.Spec.Template.Spec.ServiceAccountName, registry.Parse(c.Image).Registry, f.RegistryUser, f.RegistryToken); err != nil {
@@ -361,12 +387,13 @@ func checkNames(ns, deployment, container string) error {
 // writeRole gives switchyard's service account what the namespace's boxes need, nothing else;
 // with no box left it goes.
 func (s *Server) writeRole(ctx context.Context, k kube.Kube, ns string) error {
-	var states, secrets, accounts []string
+	var states, secrets, accounts, managed []string
 	for _, b := range s.store.Get().Boxes {
 		if b.Namespace != ns {
 			continue
 		}
 		states = append(states, b.State())
+		managed = append(managed, b.StatefulSets...)
 		names, err := deploy.PullSecrets(ctx, k, ns, b.Deployment)
 		if err != nil {
 			return err
@@ -412,11 +439,17 @@ func (s *Server) writeRole(ctx context.Context, k kube.Kube, ns string) error {
 		rule("", []string{"configmaps"}, []string{"create"}),
 		rule("", []string{"configmaps"}, []string{"get", "patch", "update"}, states...),
 	}
+	if hasBackup || len(managed) > 0 {
+		rules = append(rules, rule("apps", []string{"statefulsets"}, []string{"get", "list"}))
+	}
 	if hasBackup {
 		rules = append(rules,
-			rule("apps", []string{"statefulsets"}, []string{"get", "list"}),
 			rule("apps", []string{"statefulsets/scale"}, []string{"get", "patch", "update"}),
 			rule("", []string{"persistentvolumeclaims"}, []string{"get", "list"}))
+	}
+	if len(managed) > 0 {
+		slices.Sort(managed)
+		rules = append(rules, rule("apps", []string{"statefulsets"}, []string{"patch"}, slices.Compact(managed)...))
 	}
 	if len(secrets) > 0 {
 		rules = append(rules, rule("", []string{"secrets"}, []string{"get"}, slices.Compact(secrets)...))

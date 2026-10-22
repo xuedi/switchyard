@@ -77,15 +77,12 @@ func port(c map[string]any) int {
 
 // --- migrations and the other commands, in Jobs ---
 
-// migrations runs the pending-SQL check and the migrate command in the new image. drops: the
-// check found destructive statements and Deploy anyway let them through.
-func (r *Runner) migrations(ctx context.Context, tag string, allow bool) (drops bool, err error) {
+// pendingSQL runs the pending-SQL check in the new image, before anything moves. drops: it
+// found destructive statements and Deploy anyway let them through.
+func (r *Runner) pendingSQL(ctx context.Context, tag string, allow bool) (drops bool, err error) {
 	b := r.Box()
-	if b.PendingSQL == "" && b.Migrate == "" {
-		return false, nil
-	}
-	r.step(ctx, "migrate", "migrations in %s", tag)
 	if b.PendingSQL != "" {
+		r.step(ctx, "check", "pending migrations in %s", tag)
 		cmd := append([]string{"sh", "-c", `"$@" >/tmp/switchyard-pending.sql || exit $?; echo "` + sqlMarker + `"; cat /tmp/switchyard-pending.sql`, "sh"}, strings.Fields(b.PendingSQL)...)
 		out, err := r.job(ctx, "pending-sql", tag, cmd)
 		if err != nil && ctx.Err() == nil {
@@ -123,28 +120,46 @@ func (r *Runner) migrations(ctx context.Context, tag string, allow bool) (drops 
 			}
 		}
 	}
-	if b.Migrate != "" {
-		r.logf("migrate: %s", b.Migrate)
-		out, err := r.job(ctx, "migrate", tag, strings.Fields(b.Migrate))
-		r.tail(out, 30)
-		if err != nil {
-			return drops, fmt.Errorf("migrate: %w", err)
-		}
-	}
 	return drops, nil
 }
 
-// after runs the cache command after a switch; a failure is only logged.
-func (r *Runner) after(ctx context.Context, tag string) {
+// migrate runs the migrate command in the new image, once: a migration that failed halfway may
+// be worse when run again.
+func (r *Runner) migrate(ctx context.Context, tag string) error {
+	b := r.Box()
+	if b.Migrate == "" {
+		return nil
+	}
+	r.step(ctx, "migrate", "migrate in %s: %s", tag, b.Migrate)
+	out, err := r.job(ctx, "migrate", tag, strings.Fields(b.Migrate))
+	r.tail(out, 30)
+	if err != nil {
+		return fmt.Errorf("migrate: %w", err)
+	}
+	return nil
+}
+
+// after runs the cache command after a switch, up to three times: a new pod's first connection
+// may be refused while the cluster's firewall catches up with it, and clearing a cache is safe to
+// repeat. false: it failed every time; the switch is done, so that only marks the run.
+func (r *Runner) after(ctx context.Context, tag string) bool {
 	b := r.Box()
 	if b.Cache == "" {
-		return
+		return true
 	}
 	r.step(ctx, "after", "cache command: %s", b.Cache)
-	out, err := r.job(ctx, "cache", tag, strings.Fields(b.Cache))
-	r.tail(out, 10)
-	if err != nil {
-		r.logf("the cache command failed: %v", err)
+	for try := 1; ; try++ {
+		out, err := r.job(ctx, "cache", tag, strings.Fields(b.Cache))
+		r.tail(out, 10)
+		if err == nil {
+			return true
+		}
+		if try == 3 {
+			r.logf("the cache command failed: %v", err)
+			return false
+		}
+		r.logf("the cache command failed, once more in 10 s")
+		time.Sleep(10 * time.Second)
 	}
 }
 

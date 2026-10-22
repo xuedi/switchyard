@@ -50,6 +50,15 @@ func WithTag(image, tag string) string {
 	return name + ":" + tag
 }
 
+// Digest is the sha256:... an image reference or a pod's imageID pins, "" when it pins none.
+func Digest(image string) string {
+	i := strings.LastIndexByte(image, '@')
+	if i < 0 || !strings.HasPrefix(image[i+1:], "sha256:") || len(image)-i-1 != 71 {
+		return ""
+	}
+	return image[i+1:]
+}
+
 func (r Ref) host() string {
 	if r.Registry == "docker.io" {
 		return "registry-1.docker.io"

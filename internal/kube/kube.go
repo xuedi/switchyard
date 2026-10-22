@@ -242,6 +242,7 @@ type Meta struct {
 	Name              string            `json:"name"`
 	Namespace         string            `json:"namespace,omitempty"`
 	UID               string            `json:"uid,omitempty"`
+	Generation        int64             `json:"generation,omitempty"`
 	CreationTimestamp time.Time         `json:"creationTimestamp"`
 	Labels            map[string]string `json:"labels,omitempty"`
 	Annotations       map[string]string `json:"annotations,omitempty"`
@@ -307,6 +308,40 @@ func (d Deployment) Replicas() int {
 	return *d.Spec.Replicas
 }
 
+type StatefulSet struct {
+	Metadata Meta `json:"metadata"`
+	Spec     struct {
+		Replicas *int `json:"replicas"`
+		Selector struct {
+			MatchLabels map[string]string `json:"matchLabels"`
+		} `json:"selector"`
+		Template struct {
+			Spec PodSpec `json:"spec"`
+		} `json:"template"`
+	} `json:"spec"`
+	Status struct {
+		ObservedGeneration int64  `json:"observedGeneration"`
+		ReadyReplicas      int    `json:"readyReplicas"`
+		UpdatedReplicas    int    `json:"updatedReplicas"`
+		CurrentRevision    string `json:"currentRevision"`
+		UpdateRevision     string `json:"updateRevision"`
+	} `json:"status"`
+}
+
+func (s StatefulSet) Replicas() int {
+	if s.Spec.Replicas == nil {
+		return 1
+	}
+	return *s.Spec.Replicas
+}
+
+// RolledOut: every pod runs the newest template and is ready.
+func (s StatefulSet) RolledOut() bool {
+	n := s.Replicas()
+	return s.Status.ObservedGeneration >= s.Metadata.Generation && s.Status.UpdatedReplicas >= n && s.Status.ReadyReplicas >= n &&
+		(n == 0 || s.Status.CurrentRevision == s.Status.UpdateRevision)
+}
+
 type CronJob struct {
 	Metadata Meta `json:"metadata"`
 	Spec     struct {
@@ -340,6 +375,7 @@ type ContainerStatus struct {
 	Name         string `json:"name"`
 	Ready        bool   `json:"ready"`
 	RestartCount int    `json:"restartCount"`
+	ImageID      string `json:"imageID"`
 	State        struct {
 		Waiting *struct {
 			Reason  string `json:"reason"`

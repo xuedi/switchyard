@@ -367,7 +367,7 @@ if [ -e /sy/failed/` + it.Name + ` ]; then rm -f ` + f + `.part; echo "` + it.Na
 		{name: "tar-" + it.Name, image: c.tools, script: tarScript}}
 }
 
-// runPod is a backup run: kind is manual, scheduled or pre-restore.
+// runPod is a backup run: kind is manual, scheduled, pre-restore or pre-deploy.
 func runPod(b config.Backup, c cluster, kind string) map[string]any {
 	steps := []step{{name: "start", image: c.tools, script: startScript}}
 	if b.Before != nil {

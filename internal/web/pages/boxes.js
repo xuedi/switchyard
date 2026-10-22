@@ -100,6 +100,11 @@ async function loadDetails(box) {
   $("followers").innerHTML = (details.Followers || []).length
     ? details.Followers.map(f => `<label class="check"><input type="checkbox" value="${esc(f)}"${follow.includes(f) ? " checked" : ""}>${esc(f)}</label>`).join("")
     : "none run the same image";
+  const managed = box ? box.statefulSets || [] : [];
+  const sets = [...new Set([...(details.StatefulSets || []), ...managed])].sort();
+  $("statefulsets").innerHTML = sets.length
+    ? sets.map(n => `<label class="check"><input type="checkbox" value="${esc(n)}"${managed.includes(n) ? " checked" : ""}>${esc(n)}</label>`).join("")
+    : "none in the namespace";
 }
 
 function fill(b) {
@@ -160,6 +165,7 @@ $("save").addEventListener("click", async () => {
     namespace: $("ns").value, deployment: $("dep").value,
     container: details && details.Containers.length > 1 ? $("container").value : "",
     followers: [...$("followers").querySelectorAll("input:checked")].map(x => x.value),
+    statefulSets: [...$("statefulsets").querySelectorAll("input:checked")].map(x => x.value),
     pendingSQL: $("pendingsql").value.trim(), migrate: $("migrate").value.trim(), cache: $("cache").value.trim(),
     site: $("site").value.trim(), pages: $("pages").value.split("\n").map(x => x.trim()).filter(Boolean),
     links: $("links").value.trim(), pause: num("pause"), keep: num("keep"),

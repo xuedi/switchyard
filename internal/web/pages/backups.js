@@ -12,7 +12,7 @@ const size = n => n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : n >= 1e6 ? (n / 1e6)
 const params = new URLSearchParams(location.search);
 const ns = params.get("n") || "";
 const q = "?n=" + encodeURIComponent(ns);
-const NAMES = {manual: "Backup", scheduled: "Scheduled backup", "pre-restore": "Safety backup", restore: "Restore", index: "Listing"};
+const NAMES = {manual: "Backup", scheduled: "Scheduled backup", "pre-restore": "Safety backup", "pre-deploy": "Backup before a deploy", restore: "Restore", index: "Listing"};
 const LOG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><polyline points="7,9 10,12 7,15"/><line x1="12" y1="15" x2="17" y2="15"/></svg>`;
 const runURL = r => "run" + q + (r ? "&r=" + encodeURIComponent(r) : "");
 
@@ -49,7 +49,7 @@ function render(v) {
   $("now").classList.toggle("confirm", armed === "now");
 
   const rows = (v.Archives || []).map(a => {
-    const badge = a.Kind === "pre-restore" ? `<span class="badge canary">pre-restore</span>` : a.Kind === "scheduled" ? `<span class="badge">scheduled</span>` : "";
+    const badge = a.Kind === "pre-restore" || a.Kind === "pre-deploy" ? `<span class="badge canary">${esc(a.Kind)}</span>` : a.Kind === "scheduled" ? `<span class="badge">scheduled</span>` : "";
     const state = a.Complete ? "" : `<span class="badge">incomplete</span>`;
     const items = a.Items.length ? a.Items.map(esc).join(", ") : `<span class="muted">${a.Files.length} files of another layout</span>`;
     return `<tr><td class="num"><code>${esc(a.Run)}</code></td><td>${items}</td><td class="num hide-s">${size(a.Size)}</td>

@@ -24,14 +24,14 @@ import (
 
 const (
 	StateName = "switchyard-backup" // the ConfigMap, and the CronJob (other backups may key on it)
-	kindLabel = "switchyard/backup" // on every Job of a set: manual, scheduled, pre-restore, restore, index
+	kindLabel = "switchyard/backup" // on every Job of a set: manual, scheduled, pre-restore, pre-deploy, restore, index
 	keepRuns  = 15
 	logLines  = 300
 )
 
 // Run is one backup, restore or listing.
 type Run struct {
-	Kind      string // manual, scheduled, pre-restore, restore, index
+	Kind      string // manual, scheduled, pre-restore, pre-deploy, restore, index
 	Status    string // running, ok, failed
 	Message   string
 	Started   string
@@ -605,7 +605,7 @@ func (r *Runner) scaleUp(ctx context.Context, run *Run, wait bool) {
 
 func (r *Runner) begin(kind, by string) error {
 	b := r.Set()
-	if busy := r.e.BoxBusy(b.Namespace); busy != "" {
+	if busy := r.e.BoxBusy(b.Namespace); busy != "" && kind != "pre-deploy" {
 		return Refused(busy + ": the backup waits for it")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -660,6 +660,18 @@ func (r *Runner) Start(by string) error {
 		r.finish(err, "backup "+ts+" written")
 	}()
 	return nil
+}
+
+// BeforeDeploy runs a hot backup for a deploy that is about to move StatefulSets of the
+// namespace, and waits for it. The deploy holds its box, so that does not count as busy.
+func (r *Runner) BeforeDeploy(ctx context.Context, by string) (string, error) {
+	if err := r.begin("pre-deploy", by); err != nil {
+		return "", err
+	}
+	r.started()
+	ts, err := r.backup(ctx, "pre-deploy", false)
+	r.finish(err, "backup "+ts+" written")
+	return ts, err
 }
 
 // Refresh lists the target again.

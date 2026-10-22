@@ -22,6 +22,7 @@
     </div>
     <div class="steps" id="steps" hidden></div>
     <p id="message" class="gap-b0"></p>
+    <ul id="moves" hidden></ul>
     <div class="buttons gap-b" id="abortrow" hidden><button id="abort" class="stop">Abort</button><span class="muted">Deletes the canary copy; the live tag keeps everything.</span></div>
     <div class="blocked danger gap-b" id="blocked" hidden>
       <p>Stopped before migrating: these migrations would break the live tag, which keeps running on the database during a deploy (and a rollback goes back to it). Deploy anyway only for the planned last step of a change, once no kept tag needs what they drop.</p>

@@ -10,6 +10,7 @@ const box = new URLSearchParams(location.search).get("b") || "";
 
 const NAMES = {canary: "Canary deploy", quick: "Deploy", rollback: "Rollback"};
 const LOG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><polyline points="7,9 10,12 7,15"/><line x1="12" y1="15" x2="17" y2="15"/></svg>`;
+const short = img => String(img || "").replace(/@sha256:([0-9a-f]{12})[0-9a-f]+$/, "@$1");
 const runURL = r => "run?b=" + encodeURIComponent(box) + (r ? "&r=" + encodeURIComponent(r) : "");
 
 let paused = false, clickBusy = false, clickErr = "", armed = "", armTimer = 0, lastRows = "", lastLinks = "", last = null;
@@ -43,6 +44,8 @@ function render(v) {
   const stopped = !!v.Live && v.Replicas === 0;
   $("pods").innerHTML = stopped ? `stopped: <a href="running">start it on Running</a>` : `${v.Ready} of ${v.Replicas} pods ready`;
   $("repo").textContent = v.Repo || "";
+  const managed = (v.Managed || []).map(m => `<div>statefulset ${esc(m.Name)} <code>${m.Missing ? "not found" : esc(short(m.Image))}</code></div>`).join("");
+  if ($("managed").innerHTML !== managed) $("managed").innerHTML = managed;
   $("canary").innerHTML = v.Canary ? `Canary <code>${esc(v.Canary.Tag)}</code>: ${v.Canary.Ready} of ${v.Canary.Replicas} pods ready, about ${v.Canary.Share} % of the traffic` : "";
 
   const busy = v.Busy || clickBusy || stopped;
@@ -58,10 +61,13 @@ function render(v) {
       + (x.Kept && !x.Live ? `<span class="badge">kept</span>` : "") + (x.Newer && !x.Kept ? `<span class="badge">new</span>` : "")
       + (x.Drops ? `<span class="badge">dropped</span>` : "") + (x.Missing ? `<span class="badge">not in the registry</span>` : "");
     const meta = (x.Meta || []).map(m => `<span class="meta"><span class="muted">${esc(m.Key)}</span> <code>${esc(m.Value)}</code></span>`).join(" ");
+    // only a deploy moves them, a rollback leaves them
+    const wants = (x.Newer && !x.Kept && !x.Live ? x.Wants || [] : []).filter(w => w.Moves || w.Problem).map(w => `<div class="muted">${esc(w.Name)} <code>${esc(short(w.Image))}</code> `
+      + (w.Problem ? `<span class="failed">${esc(w.Problem)}</span>` : `<span class="badge">moves</span>`) + `</div>`).join("");
     const went = x.At ? `<div class="muted">live ${esc(when(x.At))} by ${esc(x.By)}</div>` : "";
     return `<tr>
       <td><code class="${x.Live ? "live" : ""}">${esc(x.Tag)}</code> ${badges}${went}</td>
-      <td>${meta || (x.Version ? `<code>${esc(x.Version)}</code>` : "")}<div class="muted">${esc(x.Subject)}</div></td>
+      <td>${meta || (x.Version ? `<code>${esc(x.Version)}</code>` : "")}<div class="muted">${esc(x.Subject)}</div>${wants}</td>
       <td class="num hide-s">${esc(when(x.Created))}</td>
       <td class="act">${act}${x.Run ? `<a class="logicon" href="${runURL(x.Run)}" title="the log of its last deploy">${LOG}</a>` : ""}</td></tr>`;
   }).join("") : `<tr><td colspan="4" class="muted">No tags read yet.</td></tr>`;

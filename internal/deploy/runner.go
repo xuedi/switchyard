@@ -1,7 +1,8 @@
 // Package deploy moves a box's Deployment from one image tag to another: canary (a copy with the
 // new tag next to the original, by pod count), quick (the new tag at once), rollback (a kept
-// tag at once), with the migration Jobs in the new image before any traffic moves, the cache
-// command after every switch, and the followers moved along. One run per box at a time; the
+// tag at once), with the migration Jobs in the new image before any traffic moves, the managed
+// StatefulSets moved forward to what the tag wants (after a backup), the cache command after
+// every switch, and the followers moved along. One run per box at a time; the
 // history lives in the ConfigMap switchyard-<deployment> next to the app.
 package deploy
 
@@ -42,6 +43,7 @@ type Run struct {
 	From, To string
 	Allow    bool     // Deploy anyway: destructive migrations let through
 	Blocked  []string // what stopped it before migrating
+	Moves    []Move   `json:",omitempty"` // the managed StatefulSets it moved, or set out to
 	Log      []string
 }
 
@@ -90,7 +92,12 @@ func (r Refused) Error() string { return string(r) }
 
 // Engine holds a Runner per box.
 type Engine struct {
-	K  kube.Kube
+	K kube.Kube
+	// HasBackup: the namespace has a backup set. Backup runs it before a StatefulSet moves and
+	// waits for it; by goes into its log.
+	HasBackup func(ns string) bool
+	Backup    func(ctx context.Context, ns, by string) (ts string, err error)
+
 	mu sync.Mutex
 	r  map[string]*Runner
 }
@@ -103,7 +110,7 @@ func (e *Engine) Runner(b config.Box) *Runner {
 	defer e.mu.Unlock()
 	r := e.r[b.ID()]
 	if r == nil {
-		r = &Runner{k: e.K}
+		r = &Runner{k: e.K, e: e}
 		e.r[b.ID()] = r
 	}
 	r.mu.Lock()
@@ -114,6 +121,7 @@ func (e *Engine) Runner(b config.Box) *Runner {
 
 type Runner struct {
 	k kube.Kube
+	e *Engine
 
 	mu        sync.Mutex
 	box       config.Box
@@ -381,8 +389,16 @@ func (r *Runner) Start(kind, tag string, allow bool, by string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := reg.Image(ctx, tag); err != nil {
+		img, err := reg.Image(ctx, tag)
+		if err != nil {
 			return Refused("tag " + tag + ": " + err.Error())
+		}
+		moves, err := r.plan(ctx, tag, img.Labels)
+		if err != nil {
+			return err
+		}
+		if len(moves) > 0 && (r.e.HasBackup == nil || !r.e.HasBackup(b.Namespace)) {
+			return Refused(tag + " moves statefulset " + moves[0].StatefulSet + ", which needs a backup first, and " + b.Namespace + " has no backup set")
 		}
 	case Rollback:
 		st, err := r.ReadState(ctx)
@@ -443,11 +459,18 @@ func (r *Runner) exec(ctx context.Context) {
 	bg := context.Background()
 	r.save(bg)
 	var drops bool
+	cached := true
 	err := func() error {
 		var err error
 		switch run.Kind {
 		case Canary, Quick:
-			if drops, err = r.migrations(ctx, run.To, run.Allow); err != nil {
+			if drops, err = r.pendingSQL(ctx, run.To, run.Allow); err != nil {
+				return err
+			}
+			if err = r.statefulSets(ctx, run.To); err != nil {
+				return err
+			}
+			if err = r.migrate(ctx, run.To); err != nil {
 				return err
 			}
 			if run.Kind == Canary {
@@ -457,12 +480,13 @@ func (r *Runner) exec(ctx context.Context) {
 			}
 		case Rollback:
 			r.noAbort()
+			r.staysOn(ctx, run.To)
 			err = r.switchTo(ctx, run.From, run.To)
 		}
 		if err != nil {
 			return err
 		}
-		r.after(bg, run.To)
+		cached = r.after(bg, run.To)
 		return nil
 	}()
 
@@ -470,6 +494,8 @@ func (r *Runner) exec(ctx context.Context) {
 		x.Finished = now()
 		var bl *blocked
 		switch {
+		case err == nil && !cached:
+			x.Status, x.Step, x.Message = "ok", "done", x.To+" is live, the cache command failed"
 		case err == nil:
 			x.Status, x.Step, x.Message = "ok", "done", x.To+" is live"
 		case errors.As(err, &bl):
@@ -480,11 +506,16 @@ func (r *Runner) exec(ctx context.Context) {
 		default:
 			x.Status, x.Message = "failed", "failed in step "+x.Step+": "+err.Error()
 		}
+		if err != nil && len(x.Moves) > 0 && x.Step != "statefulsets" {
+			x.Message += "; the statefulsets stay moved"
+		}
 	})
 	if ctx.Err() != nil && err != nil {
 		r.logf("aborted")
 	} else if err != nil {
 		r.logf("%v", err)
+	} else if !cached {
+		r.logf("done: %s is live, the cache command failed", run.To)
 	} else {
 		r.logf("done: %s is live", run.To)
 	}
