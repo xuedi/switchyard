@@ -5,7 +5,7 @@
 <h1 align="center">switchyard</h1>
 
 <p align="center">
-  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.17.0-9141ac.svg" alt="Version"></a>
+  <a href="https://github.com/xuedi/switchyard/releases"><img src="https://img.shields.io/badge/version-0.17.1-9141ac.svg" alt="Version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-EUPL_v1.2-9141ac.svg" alt="License"></a>
   <a href="https://go.dev"><img src="https://img.shields.io/badge/Go-1.25+-9141ac.svg" alt="Go"></a>
   <img src="https://img.shields.io/badge/deps-stdlib_only-9141ac.svg" alt="Standard library only">
@@ -84,8 +84,8 @@ switchyard runs as a user service on any always-on Linux machine with `kubectl` 
 kubeconfig for the cluster, inside or outside it.
 
 ```bash
-curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.17.0/switchyard-0.17.0-linux-amd64
-install -m 0755 switchyard-0.17.0-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
+curl -fsSLO https://github.com/xuedi/switchyard/releases/download/v0.17.1/switchyard-0.17.1-linux-amd64
+install -m 0755 switchyard-0.17.1-linux-amd64 ~/.local/bin/switchyard   # or -arm64, -armv7
 switchyard setup                                                        # 127.0.0.1:8083
 ```
 
@@ -265,8 +265,10 @@ timestamp per run, in the set's time zone; a run without a manifest is incomplet
 - **A schedule that stops** shows in red on the start page and the backups page: the CronJob
   suspended (with a button to resume it), the last scheduled run failed, or a slot passed more
   than an hour ago without a run. The newest archive shows its age.
-- **Hooks:** a command run in a container made from a workload's pod spec, e.g. a maintenance
-  mode on and off; its image needs `sh`.
+- **Hooks:** a command run in a container made from a workload's pod spec (its image, user and
+  volumes), e.g. a maintenance mode on and off; its image needs `sh`. A failed hook is tried again
+  every 10 s (2 minutes, 10 for a scheduled run), for the same reason the dumps wait, so it must be
+  safe to run twice.
 - **Retention:** every run of the 5 newest dates, then the earliest run of each month for 12
   months; a run goes as a whole. Only runs with a manifest count: archives from before
   switchyard (or of a run cut off halfway) in the same directory are never pruned, they are

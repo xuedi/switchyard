@@ -3,6 +3,7 @@ package backup
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"strings"
 
@@ -48,6 +49,7 @@ type cluster struct {
 type hookSpec struct {
 	container map[string]any
 	volumes   []any
+	args      []any // the command, split at spaces
 	pull      []any
 	account   string
 }
@@ -58,6 +60,7 @@ type step struct {
 	script string
 	env    []any
 	mounts []any
+	tries  int // a hook's
 }
 
 func secretEnv(name, secret, key string) map[string]any {
@@ -104,10 +107,8 @@ func pod(b config.Backup, c cluster, steps []step, items []config.Item, rw bool)
 	var containers []any
 	for _, s := range steps {
 		if h := c.hooks[s.name]; h != nil && s.image == "" {
-			hc := map[string]any{}
-			for k, v := range h.container {
-				hc[k] = v
-			}
+			hc := maps.Clone(h.container)
+			hc["command"] = append([]any{"sh", "-c", hookScript(s.name, s.tries), "hook"}, h.args...)
 			hc["volumeMounts"] = append(append([]any{}, h.container["volumeMounts"].([]any)...), mount("sy-run", "/sy", false))
 			containers = append(containers, hc)
 			continue
@@ -144,8 +145,16 @@ func pod(b config.Backup, c cluster, steps []step, items []config.Item, rw bool)
 	return spec
 }
 
-// hookStep runs the hook's command; a failure marks it, the run goes on.
-func hookStep(name string) step { return step{name: name} }
+// hookStep runs the hook's command, tries times at most; its last failure marks it, the run goes
+// on.
+func hookStep(name string, tries int) step { return step{name: name, tries: tries} }
+
+// hookScript tries the hook every 10 s: its first connection can be refused like a dump's, and
+// an after-hook that gives up early can leave the app in maintenance mode.
+func hookScript(name string, tries int) string {
+	return `i=1; until "$@"; do if [ $i -ge ` + fmt.Sprint(tries) + ` ]; then echo "` + name + ` hook failed"; touch /sy/failed/` + name + `-hook; exit; fi
+  echo "` + name + ` hook failed, again in 10 s"; i=$((i+1)); sleep 10; done`
+}
 
 // newHook makes the hook's container from its workload's raw pod spec, with its own volume names.
 func newHook(name string, h *config.Hook, podSpec map[string]any) (*hookSpec, error) {
@@ -184,11 +193,11 @@ func newHook(name string, h *config.Hook, podSpec map[string]any) (*hookSpec, er
 			}
 		}
 	}
-	args := []any{"sh", "-c", `"$@" || { echo "` + name + ` hook failed"; touch /sy/failed/` + name + `-hook; }`, "hook"}
+	var args []any
 	for _, a := range strings.Fields(h.Command) {
 		args = append(args, a)
 	}
-	hc := map[string]any{"name": name + "-hook", "image": c["image"], "command": args,
+	hc := map[string]any{"name": name + "-hook", "image": c["image"],
 		"volumeMounts": append([]any{}, mounts...), "securityContext": sc}
 	for _, k := range []string{"env", "envFrom", "workingDir", "resources"} {
 		if c[k] != nil {
@@ -197,10 +206,11 @@ func newHook(name string, h *config.Hook, podSpec map[string]any) (*hookSpec, er
 	}
 	pull, _ := podSpec["imagePullSecrets"].([]any)
 	account, _ := podSpec["serviceAccountName"].(string)
-	return &hookSpec{container: hc, volumes: volumes, pull: pull, account: account}, nil
+	return &hookSpec{container: hc, args: args, volumes: volumes, pull: pull, account: account}, nil
 }
 
-const startScript = `mkdir -p /sy/failed; date +%s > /sy/start
+// startScript: /sy/failed open to all, a hook runs as its workload's user.
+const startScript = `mkdir -p /sy/failed; chmod 1777 /sy/failed; date +%s > /sy/start
 while :; do TS=$(date +%Y-%m-%d_%H-%M); ls /target/"$TS"_* >/dev/null 2>&1 || break; echo "$TS is taken, waiting"; sleep 10; done
 echo "$TS" > /sy/ts; echo "run $TS"`
 
@@ -369,9 +379,13 @@ if [ -e /sy/failed/` + it.Name + ` ]; then rm -f ` + f + `.part; echo "` + it.Na
 
 // runPod is a backup run: kind is manual, scheduled, pre-restore or pre-deploy.
 func runPod(b config.Backup, c cluster, kind string) map[string]any {
+	tries := 12
+	if kind == "scheduled" {
+		tries = 60
+	}
 	steps := []step{{name: "start", image: c.tools, script: startScript}}
 	if b.Before != nil {
-		steps = append(steps, hookStep("before"))
+		steps = append(steps, hookStep("before", tries))
 	}
 	for n, it := range b.Items {
 		switch it.Kind {
@@ -384,7 +398,7 @@ func runPod(b config.Backup, c cluster, kind string) map[string]any {
 		}
 	}
 	if b.After != nil {
-		steps = append(steps, hookStep("after"))
+		steps = append(steps, hookStep("after", tries))
 	}
 	steps = append(steps, lastStep(b, c, kind))
 	return pod(b, c, steps, b.Items, false)
@@ -412,7 +426,7 @@ func restorePod(b config.Backup, c cluster, picks []Pick, imp bool) map[string]a
 		byName[it.Name] = n
 	}
 	skip := `[ -z "$(ls /sy/failed)" ] || exit 0` + "\n"
-	prep := "mkdir -p /sy/failed\n"
+	prep := "mkdir -p /sy/failed; chmod 1777 /sy/failed\n"
 	var steps []step
 	for _, p := range picks {
 		n := byName[p.Item]
@@ -471,7 +485,7 @@ find ` + d + ` -mindepth 1 -maxdepth 1` + keep + ` -exec rm -rf {} + && zstd -dc
 	}
 	steps = append([]step{{name: "unpack", image: c.tools, script: prep}}, steps...)
 	if b.After != nil {
-		steps = append(steps, hookStep("after"))
+		steps = append(steps, hookStep("after", 12))
 	}
 	steps = append(steps, step{name: "finish", image: c.tools, script: `if [ -n "$(ls /sy/failed)" ]; then ok=failed; echo "failed: $(ls /sy/failed | tr '\n' ' ')"; else ok=ok; fi
 ` + indexScript + `
